@@ -1,0 +1,17 @@
+[package]
+name = "snowmelt-cli"
+description = "CLI for the snowmelt-rs distributed degree-day snow model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "snowmelt"
+path = "src/main.rs"
+
+[dependencies]
+snowmelt-core = { workspace = true }
+ndarray = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
