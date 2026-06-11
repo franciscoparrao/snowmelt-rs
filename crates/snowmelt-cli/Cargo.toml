@@ -15,3 +15,5 @@ snowmelt-core = { workspace = true }
 ndarray = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+surtgis-core = { workspace = true }
+surtgis-algorithms = { workspace = true }

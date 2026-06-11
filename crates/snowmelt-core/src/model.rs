@@ -59,6 +59,8 @@ pub struct SnowModel {
     params: DegreeDayParams,
     swe: Array2<f64>,
     temp_buf: Array2<f64>,
+    precip_buf: Array2<f64>,
+    rad_zero: Array2<f64>,
 }
 
 impl SnowModel {
@@ -72,11 +74,15 @@ impl SnowModel {
             .elevation()
             .mapv(|z| if z.is_finite() { 0.0 } else { f64::NAN });
         let temp_buf = Array2::zeros(dem.shape());
+        let precip_buf = Array2::zeros(dem.shape());
+        let rad_zero = Array2::zeros(dem.shape());
         Ok(Self {
             dem,
             params,
             swe,
             temp_buf,
+            precip_buf,
+            rad_zero,
         })
     }
 
@@ -132,12 +138,23 @@ impl SnowModel {
         self.swe.view()
     }
 
-    /// Advances the model by one step of `dt_days` days.
+    /// Advances the model by one step of `dt_days` days, optionally driven
+    /// by a shortwave radiation grid (W m⁻², daily mean over the step).
+    ///
+    /// The radiation grid feeds the enhanced temperature-index melt term
+    /// (see [`DegreeDayParams::srf`]); it is required when `srf > 0` and
+    /// ignored when `srf == 0`.
     ///
     /// # Errors
-    /// Returns an error for a non-positive/non-finite `dt_days` or a
-    /// distributed forcing whose grids do not match the DEM shape.
-    pub fn step_days(&mut self, forcing: &Forcing, dt_days: f64) -> Result<StepOutput> {
+    /// Returns an error for a non-positive/non-finite `dt_days`, a grid
+    /// (forcing or radiation) that does not match the DEM shape, or a
+    /// missing radiation grid with `srf > 0`.
+    pub fn step_radiation(
+        &mut self,
+        forcing: &Forcing,
+        radiation: Option<ArrayView2<'_, f64>>,
+        dt_days: f64,
+    ) -> Result<StepOutput> {
         if !dt_days.is_finite() || dt_days <= 0.0 {
             return Err(SnowmeltError::InvalidParameter {
                 name: "dt_days",
@@ -145,6 +162,24 @@ impl SnowModel {
             });
         }
         let shape = self.dem.shape();
+        if self.params.srf > 0.0 && radiation.is_none() {
+            return Err(SnowmeltError::InvalidParameter {
+                name: "radiation",
+                reason: "srf > 0 requires a radiation grid".to_string(),
+            });
+        }
+        if let Some(rad) = &radiation
+            && rad.dim() != shape
+        {
+            return Err(SnowmeltError::ShapeMismatch {
+                expected: shape,
+                got: rad.dim(),
+            });
+        }
+        let rad: ArrayView2<'_, f64> = match &radiation {
+            Some(r) => r.view(),
+            None => self.rad_zero.view(),
+        };
         let mut snowfall = Array2::zeros(shape);
         let mut rain = Array2::zeros(shape);
         let mut melt = Array2::zeros(shape);
@@ -158,17 +193,32 @@ impl SnowModel {
             } => {
                 let (t_ref, z_ref, precip) = (*t_ref, *z_ref, *precip);
                 let lapse = params.lapse_rate;
+                let grad = params.precip_gradient;
                 Zip::from(&mut self.temp_buf)
+                    .and(&mut self.precip_buf)
                     .and(self.dem.elevation())
-                    .par_for_each(|t, &z| *t = t_ref + lapse * (z - z_ref));
+                    .par_for_each(|t, p, &z| {
+                        *t = t_ref + lapse * (z - z_ref);
+                        let scaled = precip * (1.0 + grad * (z - z_ref));
+                        *p = if scaled.is_nan() {
+                            f64::NAN
+                        } else {
+                            scaled.max(0.0)
+                        };
+                    });
                 Zip::from(&mut self.swe)
                     .and(&self.temp_buf)
+                    .and(&self.precip_buf)
+                    .and(rad)
                     .and(&mut snowfall)
-                    .and(&mut rain)
                     .and(&mut melt)
-                    .par_for_each(|swe, &t, s, r, m| {
-                        (*s, *r, *m) = cell_step(&params, dt_days, swe, t, precip);
+                    .par_for_each(|swe, &t, &p, &g, s, m| {
+                        (*s, *m) = cell_step(&params, dt_days, swe, t, p, g);
                     });
+                Zip::from(&mut rain)
+                    .and(&self.precip_buf)
+                    .and(&snowfall)
+                    .par_for_each(|r, &p, &s| *r = p - s);
             }
             Forcing::Distributed { temp, precip } => {
                 for grid in [temp, precip] {
@@ -182,12 +232,16 @@ impl SnowModel {
                 Zip::from(&mut self.swe)
                     .and(temp)
                     .and(precip)
+                    .and(rad)
                     .and(&mut snowfall)
-                    .and(&mut rain)
                     .and(&mut melt)
-                    .par_for_each(|swe, &t, &p, s, r, m| {
-                        (*s, *r, *m) = cell_step(&params, dt_days, swe, t, p);
+                    .par_for_each(|swe, &t, &p, &g, s, m| {
+                        (*s, *m) = cell_step(&params, dt_days, swe, t, p, g);
                     });
+                Zip::from(&mut rain)
+                    .and(precip)
+                    .and(&snowfall)
+                    .par_for_each(|r, &p, &s| *r = p - s);
             }
         }
 
@@ -196,6 +250,15 @@ impl SnowModel {
             rain,
             melt,
         })
+    }
+
+    /// Advances the model by one step of `dt_days` days without radiation
+    /// forcing (pure degree-day; requires `srf == 0`).
+    ///
+    /// # Errors
+    /// See [`Self::step_radiation`].
+    pub fn step_days(&mut self, forcing: &Forcing, dt_days: f64) -> Result<StepOutput> {
+        self.step_radiation(forcing, None, dt_days)
     }
 
     /// Advances the model by one daily step.
@@ -252,7 +315,11 @@ impl SnowModel {
     }
 }
 
-/// Updates one cell for one step; returns `(snowfall, rain, melt)` in mm.
+/// Updates one cell for one step; returns `(snowfall, melt)` in mm.
+///
+/// Melt follows the enhanced temperature-index formulation (Pellicciotti
+/// et al. 2005): for `T > t_melt`, `ddf·(T − t_melt) + srf·(1 − albedo)·G`,
+/// which reduces to classic degree-day when `srf == 0`.
 #[inline]
 fn cell_step(
     params: &DegreeDayParams,
@@ -260,19 +327,23 @@ fn cell_step(
     swe: &mut f64,
     t_c: f64,
     precip_mm: f64,
-) -> (f64, f64, f64) {
-    if !swe.is_finite() || !t_c.is_finite() || !precip_mm.is_finite() {
+    rad_wm2: f64,
+) -> (f64, f64) {
+    if !swe.is_finite() || !t_c.is_finite() || !precip_mm.is_finite() || !rad_wm2.is_finite() {
         *swe = f64::NAN;
-        return (f64::NAN, f64::NAN, f64::NAN);
+        return (f64::NAN, f64::NAN);
     }
-    let snow_frac = params.snow_fraction(t_c);
-    let snowfall = precip_mm * snow_frac;
-    let rain = precip_mm - snowfall;
+    let snowfall = precip_mm * params.snow_fraction(t_c);
     *swe += snowfall;
-    let potential = params.ddf * (t_c - params.t_melt).max(0.0) * dt_days;
+    let potential = if t_c > params.t_melt {
+        (params.ddf * (t_c - params.t_melt) + params.srf * (1.0 - params.albedo) * rad_wm2)
+            * dt_days
+    } else {
+        0.0
+    };
     let melt = potential.min(*swe);
     *swe -= melt;
-    (snowfall, rain, melt)
+    (snowfall, melt)
 }
 
 /// Mean over finite cells; `NaN` if there are none.
@@ -479,6 +550,130 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, SnowmeltError::InvalidParameter { .. }));
+    }
+
+    #[test]
+    fn eti_radiation_term_adds_melt() {
+        let params = DegreeDayParams {
+            srf: 0.2,
+            albedo: 0.5,
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 2, 0.0), params, array![[500.0, 500.0]])
+                .unwrap();
+        // Same temperature, different radiation: 0 vs 200 W/m².
+        let out = m
+            .step_radiation(
+                &Forcing::Uniform {
+                    t_ref: 5.0,
+                    z_ref: 0.0,
+                    precip: 0.0,
+                },
+                Some(array![[0.0, 200.0]].view()),
+                1.0,
+            )
+            .unwrap();
+        // Cell 0: pure degree-day = 4*5 = 20. Cell 1: + 0.2*0.5*200 = +20.
+        assert!(approx(out.melt[[0, 0]], 20.0));
+        assert!(approx(out.melt[[0, 1]], 40.0));
+    }
+
+    #[test]
+    fn radiation_ignored_below_melt_threshold() {
+        let params = DegreeDayParams {
+            srf: 0.2,
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 0.0), params, array![[100.0]]).unwrap();
+        let out = m
+            .step_radiation(
+                &Forcing::Uniform {
+                    t_ref: -3.0,
+                    z_ref: 0.0,
+                    precip: 0.0,
+                },
+                Some(array![[300.0]].view()),
+                1.0,
+            )
+            .unwrap();
+        assert!(approx(out.melt[[0, 0]], 0.0));
+    }
+
+    #[test]
+    fn srf_without_radiation_grid_is_an_error() {
+        let params = DegreeDayParams {
+            srf: 0.2,
+            ..DegreeDayParams::default()
+        };
+        let mut m = SnowModel::new(flat_dem(1, 1, 0.0), params).unwrap();
+        let err = m
+            .step(&Forcing::Uniform {
+                t_ref: 5.0,
+                z_ref: 0.0,
+                precip: 0.0,
+            })
+            .unwrap_err();
+        assert!(matches!(err, SnowmeltError::InvalidParameter { .. }));
+    }
+
+    #[test]
+    fn radiation_grid_shape_is_checked() {
+        let mut m = SnowModel::new(flat_dem(2, 2, 0.0), DegreeDayParams::default()).unwrap();
+        let err = m
+            .step_radiation(
+                &Forcing::Uniform {
+                    t_ref: 0.0,
+                    z_ref: 0.0,
+                    precip: 0.0,
+                },
+                Some(Array2::zeros((3, 3)).view()),
+                1.0,
+            )
+            .unwrap_err();
+        assert!(matches!(err, SnowmeltError::ShapeMismatch { .. }));
+    }
+
+    #[test]
+    fn precip_gradient_scales_with_elevation() {
+        let params = DegreeDayParams {
+            precip_gradient: 0.0005,
+            ..DegreeDayParams::default()
+        };
+        // Cells at 0 m and 2000 m; forcing at 0 m, 10 mm, cold (all snow).
+        let dem = Dem::new(array![[0.0, 2000.0]]).unwrap();
+        let mut m = SnowModel::new(dem, params).unwrap();
+        let out = m
+            .step(&Forcing::Uniform {
+                t_ref: -20.0,
+                z_ref: 0.0,
+                precip: 10.0,
+            })
+            .unwrap();
+        assert!(approx(out.snowfall[[0, 0]], 10.0));
+        // p(2000) = 10 * (1 + 0.0005*2000) = 20 mm.
+        assert!(approx(out.snowfall[[0, 1]], 20.0));
+    }
+
+    #[test]
+    fn precip_gradient_clamps_to_zero() {
+        let params = DegreeDayParams {
+            precip_gradient: -0.001,
+            ..DegreeDayParams::default()
+        };
+        // At 2000 m: 10 * (1 - 0.001*2000) = -10 → clamped to 0.
+        let dem = Dem::new(array![[2000.0]]).unwrap();
+        let mut m = SnowModel::new(dem, params).unwrap();
+        let out = m
+            .step(&Forcing::Uniform {
+                t_ref: -20.0,
+                z_ref: 0.0,
+                precip: 10.0,
+            })
+            .unwrap();
+        assert!(approx(out.snowfall[[0, 0]], 0.0));
+        assert!(approx(out.rain[[0, 0]], 0.0));
     }
 
     #[test]

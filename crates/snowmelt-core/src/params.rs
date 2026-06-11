@@ -20,6 +20,20 @@ pub struct DegreeDayParams {
     /// Vertical temperature lapse rate (°C m⁻¹), applied when extrapolating
     /// a reference temperature over the DEM. Typically `-0.0065`.
     pub lapse_rate: f64,
+    /// Shortwave radiation factor (mm day⁻¹ (W m⁻²)⁻¹) of the enhanced
+    /// temperature-index model (Pellicciotti et al. 2005). With `srf > 0`
+    /// melt becomes `ddf·(T − t_melt) + srf·(1 − albedo)·G` for `T > t_melt`,
+    /// and a radiation grid `G` (W m⁻², daily mean) must be supplied via
+    /// [`SnowModel::step_radiation`](crate::SnowModel::step_radiation).
+    /// `0` (default) disables the radiative term (pure degree-day).
+    /// Typical daily value: ~0.2 (0.0094 mm h⁻¹ (W m⁻²)⁻¹ · 24).
+    pub srf: f64,
+    /// Snow albedo (0–1) used by the radiative melt term. Typical: 0.4–0.8.
+    pub albedo: f64,
+    /// Orographic precipitation gradient (m⁻¹), applied to uniform forcings:
+    /// `p(z) = p_ref · (1 + precip_gradient·(z − z_ref))`, clamped to ≥ 0.
+    /// `0` (default) means uniform precipitation. Typical: 0.0002–0.001.
+    pub precip_gradient: f64,
 }
 
 impl Default for DegreeDayParams {
@@ -30,6 +44,9 @@ impl Default for DegreeDayParams {
             t_snow: 0.0,
             t_rain: 2.0,
             lapse_rate: -0.0065,
+            srf: 0.0,
+            albedo: 0.6,
+            precip_gradient: 0.0,
         }
     }
 }
@@ -47,6 +64,9 @@ impl DegreeDayParams {
             ("t_snow", self.t_snow),
             ("t_rain", self.t_rain),
             ("lapse_rate", self.lapse_rate),
+            ("srf", self.srf),
+            ("albedo", self.albedo),
+            ("precip_gradient", self.precip_gradient),
         ];
         for (name, value) in finite {
             if !value.is_finite() {
@@ -60,6 +80,18 @@ impl DegreeDayParams {
             return Err(SnowmeltError::InvalidParameter {
                 name: "ddf",
                 reason: format!("must be >= 0, got {}", self.ddf),
+            });
+        }
+        if self.srf < 0.0 {
+            return Err(SnowmeltError::InvalidParameter {
+                name: "srf",
+                reason: format!("must be >= 0, got {}", self.srf),
+            });
+        }
+        if !(0.0..=1.0).contains(&self.albedo) {
+            return Err(SnowmeltError::InvalidParameter {
+                name: "albedo",
+                reason: format!("must be in [0, 1], got {}", self.albedo),
             });
         }
         if self.t_snow > self.t_rain {

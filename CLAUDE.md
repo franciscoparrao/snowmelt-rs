@@ -1,8 +1,11 @@
 # snowmelt-rs — Modelo de derretimiento nival / glaciar (Rust)
 
-> **Estado:** v0.1 MVP implementado (2026-06-10): workspace `snowmelt-core` + `snowmelt-cli`,
-> grado-día distribuido, partición lluvia-nieve, forzantes uniformes (lapse rate) y grillas,
-> CLI con DEM .asc + CSV. 26 tests + doctest, clippy limpio. Creado 2026-06-10.
+> **Estado:** v0.2 implementado (2026-06-10): ETI (Pellicciotti 2005) con radiación
+> potencial desde SurtGIS terrain (slope/aspect + geometría solar, caché por día del año),
+> gradiente orográfico de precipitación, `step_radiation` en core. v0.1 (2026-06-10):
+> grado-día distribuido, partición lluvia-nieve, CLI con DEM .asc + CSV.
+> Pendiente v0.3: sombreado por horizonte, albedo dinámico, balance de energía,
+> validación MODIS/DGA, PyO3, interfaz rainflow. Creado 2026-06-10.
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea G3).
 

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/snowmelt-core", "crates/snowmelt-cli"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Francisco Parra O. <gran.huja@gmail.com>"]
@@ -13,7 +13,9 @@ ndarray = { version = "0.16", features = ["rayon"] }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-snowmelt-core = { path = "crates/snowmelt-core", version = "0.1.0" }
+surtgis-core = { version = "0.15", default-features = false }
+surtgis-algorithms = "0.15"
+snowmelt-core = { path = "crates/snowmelt-core", version = "0.2.0" }
 
 [profile.release]
 lto = true
