@@ -6,9 +6,17 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[lib]
+name = "snowmelt_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "snowmelt"
 path = "src/main.rs"
+
+[[bin]]
+name = "snowmelt-validate"
+path = "src/bin/validate.rs"
 
 [dependencies]
 snowmelt-core = { workspace = true }

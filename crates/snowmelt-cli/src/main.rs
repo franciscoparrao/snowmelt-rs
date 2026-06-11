@@ -4,11 +4,9 @@
 //! simula acumulación/derretimiento de SWE y escribe la serie agregada
 //! más la grilla final de SWE.
 
-mod asc;
-mod forcing_csv;
-mod solar;
+use snowmelt_cli::{asc, forcing_csv, solar};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
@@ -152,6 +150,16 @@ struct Cli {
     /// Enfriamiento máximo del pack bajo 0 °C [K] para el cold content
     #[arg(long, default_value_t = 10.0)]
     t_cold_max: f64,
+
+    /// Fechas (de la serie de forzantes) en que escribir snapshots
+    /// swe_FECHA.asc y cover_FECHA.asc, separadas por coma
+    #[arg(long, value_delimiter = ',')]
+    snapshot_dates: Vec<String>,
+
+    /// SWE [mm] sobre el cual una celda cuenta como cubierta de nieve
+    /// en los snapshots cover_FECHA.asc
+    #[arg(long, default_value_t = 1.0)]
+    cover_threshold: f64,
 }
 
 fn main() -> Result<()> {
@@ -226,6 +234,7 @@ fn main() -> Result<()> {
     let mut series = String::from(
         "date,snowfall_mm,rain_mm,melt_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction\n",
     );
+    let snapshot_dates: HashSet<&str> = cli.snapshot_dates.iter().map(String::as_str).collect();
     let mut total_melt = 0.0;
     let mut total_precip = 0.0;
     // Cache de radiación potencial por día del año (se repite entre años).
@@ -278,6 +287,22 @@ fn main() -> Result<()> {
             s.mean_albedo,
             s.snow_cover_fraction
         );
+
+        if snapshot_dates.contains(rec.date.as_str()) {
+            let swe_path = cli.out_dir.join(format!("swe_{}.asc", rec.date));
+            asc::write(&swe_path, &header, model.swe())
+                .with_context(|| format!("snapshot {}", swe_path.display()))?;
+            let cover = model.swe().mapv(|s| {
+                if s.is_finite() {
+                    f64::from(s >= cli.cover_threshold)
+                } else {
+                    f64::NAN
+                }
+            });
+            let cover_path = cli.out_dir.join(format!("cover_{}.asc", rec.date));
+            asc::write(&cover_path, &header, cover.view())
+                .with_context(|| format!("snapshot {}", cover_path.display()))?;
+        }
     }
 
     let series_path = cli.out_dir.join("series.csv");

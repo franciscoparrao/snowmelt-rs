@@ -163,10 +163,25 @@ out["melt"], m.swe(), m.albedo()
 
 Compilación: `pip install maturin && maturin develop --release -m crates/snowmelt-python/Cargo.toml`.
 
-## Roadmap (v0.5)
+## Validación
 
-- Validación contra MODIS de cobertura nival y caudales DGA en cuenca andina real.
-- Interfaz de aporte de deshielo hacia rainflow/Hydroflux.
+Primera validación contra MODIS MOD10A1 en la cuenca alta del Maipo
+(temporada 2019, modelo sin calibrar, balance de energía + albedo
+dinámico): **accuracy 85.5%, F1 0.83, bias 1.07** sobre 5 fechas
+despejadas (julio: F1 0.92). Pipeline reproducible y análisis en
+[`validation/maipo-alto/`](validation/maipo-alto/README.md). El binario
+`snowmelt-validate` calcula las métricas:
+
+```bash
+snowmelt-validate out/cover_2019-07-15.asc:data/modis_2019-07-15.asc ...
+```
+
+## Roadmap (v0.6)
+
+- Calibración (t_cold_max, albedo_min/τ, nubosidad efectiva) guiada por
+  los sesgos estacionales detectados en la validación.
+- Validación de caudales contra estaciones DGA; interfaz hacia
+  rainflow/Hydroflux.
 - Calor de lluvia sobre nieve y sublimación con pérdida de masa.
 
 ## Licencia

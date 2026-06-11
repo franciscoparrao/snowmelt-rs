@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0 — 2026-06-11
+
+### Agregado
+- **Validación MODIS en cuenca andina real** (`validation/maipo-alto/`):
+  cuenca alta del Maipo, temporada 2019, DEM Copernicus GLO-30 + ERA5
+  (Open-Meteo) + CR2MET pr + MOD10A1 v6.1. Con defaults (sin calibrar):
+  **accuracy 85.5%, F1 0.83, bias 1.07** sobre 5 fechas despejadas;
+  julio F1 0.92. Script reproducible `fetch_data.py` + README con
+  métricas y caveats.
+- **`snowmelt-validate`**: binario de métricas de cobertura
+  (confusión, accuracy, precision, recall, F1, bias) entre grillas .asc
+  simuladas y observadas, por par y agregado.
+- **Snapshots por fecha**: `--snapshot-dates d1,d2,...` escribe
+  `swe_FECHA.asc` y `cover_FECHA.asc` (umbral `--cover-threshold`,
+  default 10 mm SWE en la validación).
+- `snowmelt-cli` expone lib interna (`asc`, `forcing_csv`, `solar`)
+  compartida entre ambos binarios.
+
 ## 0.4.0 — 2026-06-11
 
 ### Agregado

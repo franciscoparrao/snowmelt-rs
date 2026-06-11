@@ -1,2 +1,5 @@
 /target
 out*/
+validation/*/data/
+validation/*/out/
+__pycache__/
