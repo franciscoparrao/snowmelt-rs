@@ -1,11 +1,12 @@
 # snowmelt-rs — Modelo de derretimiento nival / glaciar (Rust)
 
-> **Estado:** v0.3 implementado (2026-06-11): albedo dinámico por edad (AlbedoDecay),
-> sombreado por horizonte (SurtGIS horizon_angles + solar_radiation_shadowed),
-> bindings Python (snowmelt-python, PyO3+numpy abi3). v0.2 (2026-06-10): ETI
-> (Pellicciotti 2005) con radiación de SurtGIS, gradiente orográfico. v0.1: grado-día
-> distribuido + CLI. Pendiente v0.4: balance de energía completo, validación
-> MODIS/DGA, interfaz rainflow. Creado 2026-06-10.
+> **Estado:** v0.4 implementado (2026-06-11): balance de energía completo
+> (EnergyBalanceParams: SW neta + LW Brutsaert + flujos turbulentos bulk + cold
+> content por celda). v0.3: albedo dinámico por edad, sombreado por horizonte,
+> bindings Python (PyO3). v0.2: ETI (Pellicciotti 2005) con radiación SurtGIS,
+> gradiente orográfico. v0.1: grado-día distribuido + CLI. Pendiente v0.5:
+> validación MODIS/DGA en cuenca real, interfaz rainflow, rain-on-snow y
+> sublimación con pérdida de masa. Creado 2026-06-10.
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea G3).
 

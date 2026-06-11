@@ -3,6 +3,7 @@
 use ndarray::{Array2, ArrayView2, Zip};
 
 use crate::dem::Dem;
+use crate::energy;
 use crate::error::{Result, SnowmeltError};
 use crate::forcing::Forcing;
 use crate::params::DegreeDayParams;
@@ -65,6 +66,12 @@ pub struct SnowModel {
     age: Array2<f64>,
     /// Per-cell albedo used by the radiative term in the current step.
     albedo_buf: Array2<f64>,
+    /// Cold content of the pack (J m⁻²; energy-balance mode only).
+    cold_content: Array2<f64>,
+    /// Air pressure per cell (Pa), derived once from elevation.
+    pressure_buf: Array2<f64>,
+    /// Scratch: net energy flux (W m⁻²) in energy-balance mode.
+    q_buf: Array2<f64>,
     temp_buf: Array2<f64>,
     precip_buf: Array2<f64>,
     rad_zero: Array2<f64>,
@@ -92,6 +99,15 @@ impl SnowModel {
                 f64::NAN
             }
         });
+        let cold_content = swe.clone();
+        let pressure_buf = dem.elevation().mapv(|z| {
+            if z.is_finite() {
+                energy::air_pressure_pa(z)
+            } else {
+                f64::NAN
+            }
+        });
+        let q_buf = Array2::zeros(dem.shape());
         let temp_buf = Array2::zeros(dem.shape());
         let precip_buf = Array2::zeros(dem.shape());
         let rad_zero = Array2::zeros(dem.shape());
@@ -101,6 +117,9 @@ impl SnowModel {
             swe,
             age,
             albedo_buf,
+            cold_content,
+            pressure_buf,
+            q_buf,
             temp_buf,
             precip_buf,
             rad_zero,
@@ -171,6 +190,12 @@ impl SnowModel {
         self.albedo_buf.view()
     }
 
+    /// Cold content of the pack (J m⁻²; only updated in energy-balance
+    /// mode). Zero means an isothermal pack at 0 °C.
+    pub fn cold_content(&self) -> ArrayView2<'_, f64> {
+        self.cold_content.view()
+    }
+
     /// Advances the model by one step of `dt_days` days, optionally driven
     /// by a shortwave radiation grid (W m⁻², daily mean over the step).
     ///
@@ -195,10 +220,10 @@ impl SnowModel {
             });
         }
         let shape = self.dem.shape();
-        if self.params.srf > 0.0 && radiation.is_none() {
+        if (self.params.srf > 0.0 || self.params.energy_balance.is_some()) && radiation.is_none() {
             return Err(SnowmeltError::InvalidParameter {
                 name: "radiation",
-                reason: "srf > 0 requires a radiation grid".to_string(),
+                reason: "srf > 0 or energy-balance mode requires a radiation grid".to_string(),
             });
         }
         if let Some(rad) = &radiation
@@ -283,15 +308,56 @@ impl SnowModel {
         }
 
         // Pass 3: accumulation and melt.
-        Zip::from(&mut self.swe)
-            .and(temp)
-            .and(rad)
-            .and(&self.albedo_buf)
-            .and(&snowfall)
-            .and(&mut melt)
-            .par_for_each(|swe, &t, &g, &albedo, &s, m| {
-                *m = melt_cell(&params, dt_days, swe, t, g, albedo, s);
-            });
+        match params.energy_balance {
+            Some(eb) => {
+                // 3a: net energy flux per cell (W/m²).
+                Zip::from(&mut self.q_buf)
+                    .and(temp)
+                    .and(rad)
+                    .and(&self.albedo_buf)
+                    .and(&self.pressure_buf)
+                    .par_for_each(|q, &t, &g, &albedo, &press| {
+                        *q = if t.is_finite()
+                            && g.is_finite()
+                            && albedo.is_finite()
+                            && press.is_finite()
+                        {
+                            energy::net_energy(&eb, t, g, albedo, press)
+                        } else {
+                            f64::NAN
+                        };
+                    });
+                // 3b: cold content and melt.
+                Zip::from(&mut self.swe)
+                    .and(&self.q_buf)
+                    .and(&snowfall)
+                    .and(&mut self.cold_content)
+                    .and(&mut melt)
+                    .par_for_each(|swe, &q, &s, cold, m| {
+                        if !swe.is_finite() || !q.is_finite() || !s.is_finite() {
+                            *swe = f64::NAN;
+                            *cold = f64::NAN;
+                            *m = f64::NAN;
+                            return;
+                        }
+                        *swe += s;
+                        let potential = energy::apply_energy(&eb, q, dt_days, *swe, cold);
+                        *m = potential.min(*swe);
+                        *swe -= *m;
+                    });
+            }
+            None => {
+                Zip::from(&mut self.swe)
+                    .and(temp)
+                    .and(rad)
+                    .and(&self.albedo_buf)
+                    .and(&snowfall)
+                    .and(&mut melt)
+                    .par_for_each(|swe, &t, &g, &albedo, &s, m| {
+                        *m = melt_cell(&params, dt_days, swe, t, g, albedo, s);
+                    });
+            }
+        }
 
         // Pass 4: rain is what did not fall as snow.
         Zip::from(&mut rain)
@@ -845,6 +911,142 @@ mod tests {
             ..DegreeDayParams::default()
         };
         assert!(SnowModel::new(flat_dem(1, 1, 0.0), crossed).is_err());
+    }
+
+    #[test]
+    fn energy_balance_melts_on_warm_sunny_day_only() {
+        use crate::energy::EnergyBalanceParams;
+        let params = DegreeDayParams {
+            energy_balance: Some(EnergyBalanceParams::default()),
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 2000.0), params, array![[500.0]]).unwrap();
+        // Día frío: nada de melt, crece el cold content (el enfriamiento
+        // longwave de cielo despejado es fuerte: ~6 MJ/m² en un día a -5).
+        let cold_day = Forcing::Uniform {
+            t_ref: -5.0,
+            z_ref: 2000.0,
+            precip: 0.0,
+        };
+        let out = m
+            .step_radiation(&cold_day, Some(array![[80.0]].view()), 1.0)
+            .unwrap();
+        assert_eq!(out.melt[[0, 0]], 0.0);
+        assert!(m.cold_content()[[0, 0]] > 0.0);
+
+        // Día cálido y soleado (~12 MJ/m²): paga el frío y derrite.
+        let warm_day = Forcing::Uniform {
+            t_ref: 10.0,
+            z_ref: 2000.0,
+            precip: 0.0,
+        };
+        let out = m
+            .step_radiation(&warm_day, Some(array![[350.0]].view()), 1.0)
+            .unwrap();
+        let melt = out.melt[[0, 0]];
+        assert!(melt > 5.0 && melt < 80.0, "melt = {melt}");
+        assert_eq!(m.cold_content()[[0, 0]], 0.0);
+    }
+
+    #[test]
+    fn energy_balance_cold_content_delays_melt() {
+        use crate::energy::EnergyBalanceParams;
+        let params = DegreeDayParams {
+            energy_balance: Some(EnergyBalanceParams::default()),
+            ..DegreeDayParams::default()
+        };
+        let mut frio =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 2000.0), params, array![[500.0]]).unwrap();
+        let mut tibio =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 2000.0), params, array![[500.0]]).unwrap();
+        // Enfriar uno de los packs por 5 días.
+        let cold = Forcing::Uniform {
+            t_ref: -15.0,
+            z_ref: 2000.0,
+            precip: 0.0,
+        };
+        for _ in 0..5 {
+            frio.step_radiation(&cold, Some(array![[20.0]].view()), 1.0)
+                .unwrap();
+        }
+        // Mismo día cálido para ambos.
+        let warm = Forcing::Uniform {
+            t_ref: 6.0,
+            z_ref: 2000.0,
+            precip: 0.0,
+        };
+        let melt_frio = frio
+            .step_radiation(&warm, Some(array![[250.0]].view()), 1.0)
+            .unwrap()
+            .melt[[0, 0]];
+        let melt_tibio = tibio
+            .step_radiation(&warm, Some(array![[250.0]].view()), 1.0)
+            .unwrap()
+            .melt[[0, 0]];
+        assert!(
+            melt_frio < melt_tibio,
+            "pack frío ({melt_frio}) debe derretir menos que el isotérmico ({melt_tibio})"
+        );
+    }
+
+    #[test]
+    fn energy_balance_requires_radiation_and_respects_mass_balance() {
+        use crate::energy::EnergyBalanceParams;
+        let params = DegreeDayParams {
+            energy_balance: Some(EnergyBalanceParams::default()),
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 1000.0), params, array![[3.0]]).unwrap();
+        // Sin radiación → error.
+        assert!(
+            m.step(&Forcing::Uniform {
+                t_ref: 5.0,
+                z_ref: 1000.0,
+                precip: 0.0
+            })
+            .is_err()
+        );
+        // Día tórrido: el melt no puede exceder el SWE disponible.
+        let out = m
+            .step_radiation(
+                &Forcing::Uniform {
+                    t_ref: 20.0,
+                    z_ref: 1000.0,
+                    precip: 0.0,
+                },
+                Some(array![[400.0]].view()),
+                1.0,
+            )
+            .unwrap();
+        assert!(approx(out.melt[[0, 0]], 3.0));
+        assert!(approx(m.swe()[[0, 0]], 0.0));
+    }
+
+    #[test]
+    fn energy_balance_propagates_nodata() {
+        use crate::energy::EnergyBalanceParams;
+        let params = DegreeDayParams {
+            energy_balance: Some(EnergyBalanceParams::default()),
+            ..DegreeDayParams::default()
+        };
+        let dem = Dem::new(array![[1000.0, f64::NAN]]).unwrap();
+        let mut m = SnowModel::new(dem, params).unwrap();
+        let out = m
+            .step_radiation(
+                &Forcing::Uniform {
+                    t_ref: -3.0,
+                    z_ref: 1000.0,
+                    precip: 10.0,
+                },
+                Some(array![[100.0, 100.0]].view()),
+                1.0,
+            )
+            .unwrap();
+        assert!(out.melt[[0, 1]].is_nan());
+        assert!(m.cold_content()[[0, 1]].is_nan());
+        assert!(m.swe()[[0, 0]] > 0.0);
     }
 
     #[test]

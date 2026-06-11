@@ -17,7 +17,7 @@ use ndarray::Array2;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use snowmelt_core::{AlbedoDecay, DegreeDayParams, Dem, Forcing, SnowModel};
+use snowmelt_core::{AlbedoDecay, DegreeDayParams, Dem, EnergyBalanceParams, Forcing, SnowModel};
 use surtgis_algorithms::terrain::HorizonParams;
 
 #[derive(Parser, Debug)]
@@ -122,6 +122,36 @@ struct Cli {
     /// Nevada por paso [mm] que reinicia el albedo a fresco
     #[arg(long, default_value_t = 1.0)]
     albedo_refresh: f64,
+
+    /// Modo balance de energía: SW neta + LW (Brutsaert) + flujos
+    /// turbulentos bulk + cold content. Ignora --ddf/--srf y requiere
+    /// --latitude (radiación). El albedo (constante o dinámico) se reusa.
+    #[arg(long, default_value_t = false)]
+    energy_balance: bool,
+
+    /// Velocidad del viento [m/s] (modo balance de energía)
+    #[arg(long, default_value_t = 2.0)]
+    wind: f64,
+
+    /// Humedad relativa (0-1) (modo balance de energía)
+    #[arg(long, default_value_t = 0.6)]
+    rh: f64,
+
+    /// Emisividad de la nieve (modo balance de energía)
+    #[arg(long, default_value_t = 0.98)]
+    snow_emissivity: f64,
+
+    /// Coeficiente de intercambio turbulento bulk (modo balance de energía)
+    #[arg(long, default_value_t = 0.0015)]
+    exchange_coeff: f64,
+
+    /// Flujo de calor del suelo [W/m²] (modo balance de energía)
+    #[arg(long, default_value_t = 1.0)]
+    ground_heat: f64,
+
+    /// Enfriamiento máximo del pack bajo 0 °C [K] para el cold content
+    #[arg(long, default_value_t = 10.0)]
+    t_cold_max: f64,
 }
 
 fn main() -> Result<()> {
@@ -133,9 +163,12 @@ fn main() -> Result<()> {
     let elevation = grid.data.clone();
     let dem = Dem::new(grid.data).context("DEM inválido")?;
 
-    let terrain = if cli.srf > 0.0 {
+    let needs_radiation = cli.srf > 0.0 || cli.energy_balance;
+    let terrain = if needs_radiation {
         if cli.latitude.is_none() {
-            anyhow::bail!("--srf > 0 requiere --latitude para calcular la radiación potencial");
+            anyhow::bail!(
+                "--srf > 0 o --energy-balance requieren --latitude para la radiación potencial"
+            );
         }
         let horizon = cli.horizon_shading.then_some(HorizonParams {
             radius: cli.horizon_radius,
@@ -174,6 +207,14 @@ fn main() -> Result<()> {
             albedo_min: cli.albedo_min,
             tau_days: tau,
             refresh_swe_mm: cli.albedo_refresh,
+        }),
+        energy_balance: cli.energy_balance.then_some(EnergyBalanceParams {
+            wind_speed: cli.wind,
+            rel_humidity: cli.rh,
+            snow_emissivity: cli.snow_emissivity,
+            exchange_coeff: cli.exchange_coeff,
+            ground_heat: cli.ground_heat,
+            t_cold_max: cli.t_cold_max,
         }),
         precip_gradient: cli.precip_gradient,
     };

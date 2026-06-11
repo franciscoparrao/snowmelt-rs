@@ -1,5 +1,6 @@
 //! Degree-day model parameters.
 
+use crate::energy::EnergyBalanceParams;
 use crate::error::{Result, SnowmeltError};
 
 /// Snow albedo decay by age (Verseghy 1991-style exponential).
@@ -70,6 +71,12 @@ pub struct DegreeDayParams {
     /// with days since the last significant snowfall and `albedo` is
     /// ignored.
     pub albedo_decay: Option<AlbedoDecay>,
+    /// Optional full energy-balance melt (see [`EnergyBalanceParams`]).
+    /// When set, melt is driven by the net energy flux instead of the
+    /// temperature index (`ddf` and `srf` are ignored), a radiation grid
+    /// is required on every step, and `t_melt`/`albedo`/`albedo_decay`
+    /// keep their roles (surface threshold and shortwave albedo).
+    pub energy_balance: Option<EnergyBalanceParams>,
     /// Orographic precipitation gradient (m⁻¹), applied to uniform forcings:
     /// `p(z) = p_ref · (1 + precip_gradient·(z − z_ref))`, clamped to ≥ 0.
     /// `0` (default) means uniform precipitation. Typical: 0.0002–0.001.
@@ -87,6 +94,7 @@ impl Default for DegreeDayParams {
             srf: 0.0,
             albedo: 0.6,
             albedo_decay: None,
+            energy_balance: None,
             precip_gradient: 0.0,
         }
     }
@@ -168,6 +176,9 @@ impl DegreeDayParams {
                     reason: format!("must be finite and >= 0, got {}", decay.refresh_swe_mm),
                 });
             }
+        }
+        if let Some(eb) = &self.energy_balance {
+            eb.validate()?;
         }
         if self.t_snow > self.t_rain {
             return Err(SnowmeltError::InvalidParameter {

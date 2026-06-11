@@ -5,7 +5,7 @@ members = ["crates/snowmelt-core", "crates/snowmelt-cli", "crates/snowmelt-pytho
 default-members = ["crates/snowmelt-core", "crates/snowmelt-cli"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["Francisco Parra O. <gran.huja@gmail.com>"]
@@ -17,7 +17,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 surtgis-core = { version = "0.15", default-features = false }
 surtgis-algorithms = "0.15"
-snowmelt-core = { path = "crates/snowmelt-core", version = "0.3.0" }
+snowmelt-core = { path = "crates/snowmelt-core", version = "0.4.0" }
 
 [profile.release]
 lto = true

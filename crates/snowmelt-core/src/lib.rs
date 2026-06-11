@@ -30,12 +30,14 @@
 //! ```
 
 pub mod dem;
+pub mod energy;
 pub mod error;
 pub mod forcing;
 pub mod model;
 pub mod params;
 
 pub use dem::Dem;
+pub use energy::EnergyBalanceParams;
 pub use error::{Result, SnowmeltError};
 pub use forcing::Forcing;
 pub use model::{SNOW_COVER_THRESHOLD_MM, SnowModel, StepOutput, StepSummary};

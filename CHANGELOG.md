@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 — 2026-06-11
+
+### Agregado
+- **Balance de energía completo** (`EnergyBalanceParams`, opcional en
+  `DegreeDayParams.energy_balance`): onda corta neta `(1−α)·G`, onda
+  larga con emisividad atmosférica de Brutsaert (1975) y superficie de
+  nieve a `min(T_a, 0 °C)`, flujos turbulentos bulk (sensible y latente,
+  con viento/HR parametrizados y densidad del aire desde presión por
+  elevación), calor de suelo constante, y **cold content** por celda
+  (J/m², cap `c_ice·SWE·t_cold_max`): la energía negativa enfría el pack
+  y la positiva paga el déficit antes de derretir (L_f = 334 kJ/kg).
+  Reusa la radiación de SurtGIS (con sombreado opcional) y el albedo
+  constante o dinámico. Accessor `cold_content()`.
+- CLI: `--energy-balance` + `--wind`, `--rh`, `--snow-emissivity`,
+  `--exchange-coeff`, `--ground-heat`, `--t-cold-max`.
+- Python: kwargs `energy_balance=True`, `wind`, `rh`, etc. y
+  `SnowModel.cold_content()`.
+
+### Simplificaciones documentadas
+- Sin calor de lluvia sobre nieve ni pérdida de masa por sublimación;
+  onda larga de cielo despejado (consistente con la SW de cielo
+  despejado).
+
 ## 0.3.0 — 2026-06-11
 
 ### Agregado

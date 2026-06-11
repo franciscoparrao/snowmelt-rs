@@ -1,10 +1,12 @@
 # snowmelt-rs
 
-Motor de balance nival distribuido sobre DEM, en Rust. Modelos grado-día
-y ETI (enhanced temperature-index, Pellicciotti et al. 2005) con
-acumulación/ablación de SWE por celda, partición lluvia-nieve por
-temperatura, gradiente orográfico de precipitación y radiación potencial
-derivada del terreno (SurtGIS), orientado a hidrología andina.
+Motor de balance nival distribuido sobre DEM, en Rust. Tres modos de
+derretimiento — grado-día, ETI (Pellicciotti et al. 2005) y balance de
+energía completo con cold content — con acumulación/ablación de SWE por
+celda, partición lluvia-nieve por temperatura, albedo dinámico por edad,
+gradiente orográfico de precipitación y radiación potencial derivada del
+terreno (SurtGIS, con sombreado por horizonte), orientado a hidrología
+andina.
 
 Parte de la familia de motores Rust: SurtGIS, Hydroflux, Smelt, Anvil,
 Cantus, Criterium.
@@ -69,6 +71,23 @@ El albedo puede ser constante (`--albedo`) o dinámico con `--albedo-tau τ`:
 `α(t) = α_min + (α_fresh − α_min)·exp(−t/τ)`, reiniciando a fresco cuando
 la nevada del paso supera `--albedo-refresh` mm.
 
+### Balance de energía
+
+Con `--energy-balance` el derretimiento se calcula desde el flujo neto de
+energía (W m⁻²) en vez del índice de temperatura:
+
+```
+Q = (1 − α)·G + LW_in − LW_out + Q_H + Q_E + Q_G
+```
+
+con onda larga de Brutsaert (1975) y superficie a `min(T_a, 0 °C)`,
+flujos turbulentos bulk (`--wind`, `--rh`, `--exchange-coeff`), presión
+del aire desde la elevación de cada celda y calor de suelo
+(`--ground-heat`). El pack acumula **cold content** en días de balance
+negativo (cap `c_ice·SWE·t_cold_max`) y la energía positiva lo paga
+antes de derretir (L_f = 334 kJ/kg). Simplificaciones v0.4: sin calor de
+lluvia sobre nieve, sin pérdida de masa por sublimación, cielo despejado.
+
 ### Parámetros (defaults)
 
 | Flag | Default | Significado |
@@ -92,6 +111,13 @@ la nevada del paso supera `--albedo-refresh` mm.
 | `--albedo-fresh` | 0.85 | Albedo de nieve fresca (modo dinámico) |
 | `--albedo-min` | 0.4 | Albedo asintótico de nieve vieja (modo dinámico) |
 | `--albedo-refresh` | 1.0 | Nevada [mm] que reinicia el albedo a fresco |
+| `--energy-balance` | off | Derretimiento por balance de energía (ignora ddf/srf) |
+| `--wind` | 2.0 | Viento [m/s] (modo EB) |
+| `--rh` | 0.6 | Humedad relativa 0–1 (modo EB) |
+| `--snow-emissivity` | 0.98 | Emisividad de la nieve (modo EB) |
+| `--exchange-coeff` | 0.0015 | Coef. de intercambio turbulento (modo EB) |
+| `--ground-heat` | 1.0 | Calor de suelo [W/m²] (modo EB) |
+| `--t-cold-max` | 10.0 | Enfriamiento máximo del pack [K] (cold content) |
 
 ## API (snowmelt-core)
 
@@ -137,11 +163,11 @@ out["melt"], m.swe(), m.albedo()
 
 Compilación: `pip install maturin && maturin develop --release -m crates/snowmelt-python/Cargo.toml`.
 
-## Roadmap (v0.4)
+## Roadmap (v0.5)
 
-- Balance de energía completo.
-- Línea de nieves desde percepción remota; validación contra MODIS y caudales DGA.
+- Validación contra MODIS de cobertura nival y caudales DGA en cuenca andina real.
 - Interfaz de aporte de deshielo hacia rainflow/Hydroflux.
+- Calor de lluvia sobre nieve y sublimación con pérdida de masa.
 
 ## Licencia
 

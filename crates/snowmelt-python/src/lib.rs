@@ -29,7 +29,9 @@ impl PyParams {
     #[new]
     #[pyo3(signature = (ddf=4.0, t_melt=0.0, t_snow=0.0, t_rain=2.0,
         lapse_rate=-0.0065, srf=0.0, albedo=0.6, precip_gradient=0.0,
-        albedo_tau=None, albedo_fresh=0.85, albedo_min=0.4, albedo_refresh=1.0))]
+        albedo_tau=None, albedo_fresh=0.85, albedo_min=0.4, albedo_refresh=1.0,
+        energy_balance=false, wind=2.0, rh=0.6, snow_emissivity=0.98,
+        exchange_coeff=0.0015, ground_heat=1.0, t_cold_max=10.0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         ddf: f64,
@@ -44,6 +46,13 @@ impl PyParams {
         albedo_fresh: f64,
         albedo_min: f64,
         albedo_refresh: f64,
+        energy_balance: bool,
+        wind: f64,
+        rh: f64,
+        snow_emissivity: f64,
+        exchange_coeff: f64,
+        ground_heat: f64,
+        t_cold_max: f64,
     ) -> PyResult<Self> {
         let inner = core::DegreeDayParams {
             ddf,
@@ -58,6 +67,14 @@ impl PyParams {
                 albedo_min,
                 tau_days: tau,
                 refresh_swe_mm: albedo_refresh,
+            }),
+            energy_balance: energy_balance.then_some(core::EnergyBalanceParams {
+                wind_speed: wind,
+                rel_humidity: rh,
+                snow_emissivity,
+                exchange_coeff,
+                ground_heat,
+                t_cold_max,
             }),
             precip_gradient,
         };
@@ -160,6 +177,11 @@ impl PySnowModel {
     /// Edad de la nieve en días (modo albedo dinámico).
     fn snow_age<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
         self.inner.snow_age().to_pyarray(py)
+    }
+
+    /// Cold content del pack [J/m²] (modo balance de energía).
+    fn cold_content<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray2<f64>> {
+        self.inner.cold_content().to_pyarray(py)
     }
 }
 
