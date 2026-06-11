@@ -45,6 +45,8 @@ pub struct StepSummary {
     pub mean_runoff: f64,
     /// Mean SWE after the step (mm).
     pub mean_swe: f64,
+    /// Mean albedo used by the radiative term (constant if no decay).
+    pub mean_albedo: f64,
     /// Fraction of valid cells with SWE > [`SNOW_COVER_THRESHOLD_MM`].
     pub snow_cover_fraction: f64,
 }
@@ -58,6 +60,11 @@ pub struct SnowModel {
     dem: Dem,
     params: DegreeDayParams,
     swe: Array2<f64>,
+    /// Days since the last significant snowfall (only meaningful with
+    /// `params.albedo_decay`; initial snow counts as fresh).
+    age: Array2<f64>,
+    /// Per-cell albedo used by the radiative term in the current step.
+    albedo_buf: Array2<f64>,
     temp_buf: Array2<f64>,
     precip_buf: Array2<f64>,
     rad_zero: Array2<f64>,
@@ -73,6 +80,18 @@ impl SnowModel {
         let swe = dem
             .elevation()
             .mapv(|z| if z.is_finite() { 0.0 } else { f64::NAN });
+        let age = swe.clone();
+        let initial_albedo = match params.albedo_decay {
+            Some(decay) => decay.albedo_fresh,
+            None => params.albedo,
+        };
+        let albedo_buf = dem.elevation().mapv(|z| {
+            if z.is_finite() {
+                initial_albedo
+            } else {
+                f64::NAN
+            }
+        });
         let temp_buf = Array2::zeros(dem.shape());
         let precip_buf = Array2::zeros(dem.shape());
         let rad_zero = Array2::zeros(dem.shape());
@@ -80,6 +99,8 @@ impl SnowModel {
             dem,
             params,
             swe,
+            age,
+            albedo_buf,
             temp_buf,
             precip_buf,
             rad_zero,
@@ -138,6 +159,18 @@ impl SnowModel {
         self.swe.view()
     }
 
+    /// Days since the last significant snowfall per cell. Only updated
+    /// when `params.albedo_decay` is set; initial snow counts as fresh.
+    pub fn snow_age(&self) -> ArrayView2<'_, f64> {
+        self.age.view()
+    }
+
+    /// Per-cell albedo used by the radiative term in the last step
+    /// (constant grid when `params.albedo_decay` is `None`).
+    pub fn albedo(&self) -> ArrayView2<'_, f64> {
+        self.albedo_buf.view()
+    }
+
     /// Advances the model by one step of `dt_days` days, optionally driven
     /// by a shortwave radiation grid (W m⁻², daily mean over the step).
     ///
@@ -185,7 +218,8 @@ impl SnowModel {
         let mut melt = Array2::zeros(shape);
         let params = self.params;
 
-        match forcing {
+        // Resolve per-cell temperature and precipitation views.
+        let (temp, precip): (ArrayView2<'_, f64>, ArrayView2<'_, f64>) = match forcing {
             Forcing::Uniform {
                 t_ref,
                 z_ref,
@@ -206,19 +240,7 @@ impl SnowModel {
                             scaled.max(0.0)
                         };
                     });
-                Zip::from(&mut self.swe)
-                    .and(&self.temp_buf)
-                    .and(&self.precip_buf)
-                    .and(rad)
-                    .and(&mut snowfall)
-                    .and(&mut melt)
-                    .par_for_each(|swe, &t, &p, &g, s, m| {
-                        (*s, *m) = cell_step(&params, dt_days, swe, t, p, g);
-                    });
-                Zip::from(&mut rain)
-                    .and(&self.precip_buf)
-                    .and(&snowfall)
-                    .par_for_each(|r, &p, &s| *r = p - s);
+                (self.temp_buf.view(), self.precip_buf.view())
             }
             Forcing::Distributed { temp, precip } => {
                 for grid in [temp, precip] {
@@ -229,21 +251,53 @@ impl SnowModel {
                         });
                     }
                 }
-                Zip::from(&mut self.swe)
-                    .and(temp)
-                    .and(precip)
-                    .and(rad)
-                    .and(&mut snowfall)
-                    .and(&mut melt)
-                    .par_for_each(|swe, &t, &p, &g, s, m| {
-                        (*s, *m) = cell_step(&params, dt_days, swe, t, p, g);
-                    });
-                Zip::from(&mut rain)
-                    .and(precip)
-                    .and(&snowfall)
-                    .par_for_each(|r, &p, &s| *r = p - s);
+                (temp.view(), precip.view())
             }
+        };
+
+        // Pass 1: rain–snow partition.
+        Zip::from(&mut snowfall)
+            .and(temp)
+            .and(precip)
+            .par_for_each(|s, &t, &p| *s = p * params.snow_fraction(t));
+
+        // Pass 2: snow age and albedo (only in decay mode; otherwise
+        // `albedo_buf` keeps the constant set at construction).
+        if let Some(decay) = params.albedo_decay {
+            Zip::from(&mut self.age)
+                .and(&mut self.albedo_buf)
+                .and(&snowfall)
+                .par_for_each(|age, albedo, &s| {
+                    if s.is_finite() {
+                        *age = if s >= decay.refresh_swe_mm {
+                            0.0
+                        } else {
+                            *age + dt_days
+                        };
+                        *albedo = decay.albedo(*age);
+                    } else {
+                        *age = f64::NAN;
+                        *albedo = f64::NAN;
+                    }
+                });
         }
+
+        // Pass 3: accumulation and melt.
+        Zip::from(&mut self.swe)
+            .and(temp)
+            .and(rad)
+            .and(&self.albedo_buf)
+            .and(&snowfall)
+            .and(&mut melt)
+            .par_for_each(|swe, &t, &g, &albedo, &s, m| {
+                *m = melt_cell(&params, dt_days, swe, t, g, albedo, s);
+            });
+
+        // Pass 4: rain is what did not fall as snow.
+        Zip::from(&mut rain)
+            .and(precip)
+            .and(&snowfall)
+            .par_for_each(|r, &p, &s| *r = p - s);
 
         Ok(StepOutput {
             snowfall,
@@ -292,6 +346,7 @@ impl SnowModel {
         let mean_rain = nan_mean(&out.rain);
         let mean_melt = nan_mean(&out.melt);
         let mean_swe = nan_mean(&self.swe);
+        let mean_albedo = nan_mean(&self.albedo_buf);
         let (covered, valid) = self
             .swe
             .iter()
@@ -310,40 +365,45 @@ impl SnowModel {
             mean_melt,
             mean_runoff: mean_rain + mean_melt,
             mean_swe,
+            mean_albedo,
             snow_cover_fraction,
         }
     }
 }
 
-/// Updates one cell for one step; returns `(snowfall, melt)` in mm.
+/// Accumulates snowfall into `swe` and melts one cell; returns melt in mm.
 ///
 /// Melt follows the enhanced temperature-index formulation (Pellicciotti
 /// et al. 2005): for `T > t_melt`, `ddf·(T − t_melt) + srf·(1 − albedo)·G`,
 /// which reduces to classic degree-day when `srf == 0`.
 #[inline]
-fn cell_step(
+fn melt_cell(
     params: &DegreeDayParams,
     dt_days: f64,
     swe: &mut f64,
     t_c: f64,
-    precip_mm: f64,
     rad_wm2: f64,
-) -> (f64, f64) {
-    if !swe.is_finite() || !t_c.is_finite() || !precip_mm.is_finite() || !rad_wm2.is_finite() {
+    albedo: f64,
+    snowfall_mm: f64,
+) -> f64 {
+    if !swe.is_finite()
+        || !t_c.is_finite()
+        || !rad_wm2.is_finite()
+        || !albedo.is_finite()
+        || !snowfall_mm.is_finite()
+    {
         *swe = f64::NAN;
-        return (f64::NAN, f64::NAN);
+        return f64::NAN;
     }
-    let snowfall = precip_mm * params.snow_fraction(t_c);
-    *swe += snowfall;
+    *swe += snowfall_mm;
     let potential = if t_c > params.t_melt {
-        (params.ddf * (t_c - params.t_melt) + params.srf * (1.0 - params.albedo) * rad_wm2)
-            * dt_days
+        (params.ddf * (t_c - params.t_melt) + params.srf * (1.0 - albedo) * rad_wm2) * dt_days
     } else {
         0.0
     };
     let melt = potential.min(*swe);
     *swe -= melt;
-    (snowfall, melt)
+    melt
 }
 
 /// Mean over finite cells; `NaN` if there are none.
@@ -674,6 +734,117 @@ mod tests {
             .unwrap();
         assert!(approx(out.snowfall[[0, 0]], 0.0));
         assert!(approx(out.rain[[0, 0]], 0.0));
+    }
+
+    #[test]
+    fn albedo_decay_increases_melt_over_dry_days() {
+        use crate::params::AlbedoDecay;
+        let params = DegreeDayParams {
+            ddf: 0.0, // aislar el término radiativo
+            srf: 0.2,
+            albedo_decay: Some(AlbedoDecay::default()),
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 0.0), params, array![[1000.0]]).unwrap();
+        let warm_dry = Forcing::Uniform {
+            t_ref: 5.0,
+            z_ref: 0.0,
+            precip: 0.0,
+        };
+        let rad = array![[200.0]];
+        let mut melts = Vec::new();
+        for _ in 0..4 {
+            let out = m.step_radiation(&warm_dry, Some(rad.view()), 1.0).unwrap();
+            melts.push(out.melt[[0, 0]]);
+        }
+        // El albedo decae día a día → (1 − α) crece → más melt cada día.
+        assert!(
+            melts.windows(2).all(|w| w[1] > w[0]),
+            "melt no monotónico: {melts:?}"
+        );
+        // Día 1: edad 1, α = 0.4 + 0.45·exp(−1/6); melt = 0.2·(1−α)·200.
+        let alpha_1 = 0.4 + 0.45 * (-1.0_f64 / 6.0).exp();
+        assert!((melts[0] - 0.2 * (1.0 - alpha_1) * 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn snowfall_resets_albedo_to_fresh() {
+        use crate::params::AlbedoDecay;
+        let params = DegreeDayParams {
+            srf: 0.2,
+            albedo_decay: Some(AlbedoDecay::default()),
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 0.0), params, array![[1000.0]]).unwrap();
+        let rad = array![[150.0]];
+        // Envejecer la nieve 10 días secos y cálidos.
+        for _ in 0..10 {
+            let f = Forcing::Uniform {
+                t_ref: 3.0,
+                z_ref: 0.0,
+                precip: 0.0,
+            };
+            m.step_radiation(&f, Some(rad.view()), 1.0).unwrap();
+        }
+        let aged = m.albedo()[[0, 0]];
+        // Nevada fría que supera el umbral de refresco (1 mm).
+        let snow_day = Forcing::Uniform {
+            t_ref: -5.0,
+            z_ref: 0.0,
+            precip: 10.0,
+        };
+        m.step_radiation(&snow_day, Some(rad.view()), 1.0).unwrap();
+        let fresh = m.albedo()[[0, 0]];
+        assert!(aged < 0.6, "albedo envejecido: {aged}");
+        assert_eq!(fresh, 0.85, "tras nevada debe volver a fresh");
+        assert_eq!(m.snow_age()[[0, 0]], 0.0);
+    }
+
+    #[test]
+    fn constant_albedo_behavior_unchanged_without_decay() {
+        let params = DegreeDayParams {
+            srf: 0.2,
+            albedo: 0.5,
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 0.0), params, array![[500.0]]).unwrap();
+        let f = Forcing::Uniform {
+            t_ref: 5.0,
+            z_ref: 0.0,
+            precip: 0.0,
+        };
+        let rad = array![[200.0]];
+        // Mismo melt en pasos sucesivos: 4·5 + 0.2·0.5·200 = 40.
+        for _ in 0..3 {
+            let out = m.step_radiation(&f, Some(rad.view()), 1.0).unwrap();
+            assert!(approx(out.melt[[0, 0]], 40.0));
+        }
+    }
+
+    #[test]
+    fn albedo_decay_params_are_validated() {
+        use crate::params::AlbedoDecay;
+        let bad_tau = DegreeDayParams {
+            albedo_decay: Some(AlbedoDecay {
+                tau_days: 0.0,
+                ..AlbedoDecay::default()
+            }),
+            ..DegreeDayParams::default()
+        };
+        assert!(SnowModel::new(flat_dem(1, 1, 0.0), bad_tau).is_err());
+
+        let crossed = DegreeDayParams {
+            albedo_decay: Some(AlbedoDecay {
+                albedo_fresh: 0.4,
+                albedo_min: 0.8,
+                ..AlbedoDecay::default()
+            }),
+            ..DegreeDayParams::default()
+        };
+        assert!(SnowModel::new(flat_dem(1, 1, 0.0), crossed).is_err());
     }
 
     #[test]

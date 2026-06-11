@@ -17,7 +17,8 @@ use ndarray::Array2;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use snowmelt_core::{DegreeDayParams, Dem, Forcing, SnowModel};
+use snowmelt_core::{AlbedoDecay, DegreeDayParams, Dem, Forcing, SnowModel};
+use surtgis_algorithms::terrain::HorizonParams;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -91,6 +92,36 @@ struct Cli {
     /// Si se especifica, reemplaza a --transmittance (modelo Kasten 1996).
     #[arg(long)]
     linke_turbidity: Option<f64>,
+
+    /// Sombreado por horizonte topográfico (cast shadows). Precalcula
+    /// ángulos de horizonte; memoria ≈ 8·direcciones·celdas bytes.
+    #[arg(long, default_value_t = false)]
+    horizon_shading: bool,
+
+    /// Radio de búsqueda del horizonte [celdas]
+    #[arg(long, default_value_t = 100)]
+    horizon_radius: usize,
+
+    /// Direcciones acimutales para el horizonte
+    #[arg(long, default_value_t = 36)]
+    horizon_directions: usize,
+
+    /// Activa albedo dinámico con decaimiento exponencial por edad de la
+    /// nieve: α(t) = α_min + (α_fresh − α_min)·exp(−t/τ). Valor = τ [días].
+    #[arg(long)]
+    albedo_tau: Option<f64>,
+
+    /// Albedo de nieve fresca (modo decaimiento)
+    #[arg(long, default_value_t = 0.85)]
+    albedo_fresh: f64,
+
+    /// Albedo asintótico de nieve vieja (modo decaimiento)
+    #[arg(long, default_value_t = 0.4)]
+    albedo_min: f64,
+
+    /// Nevada por paso [mm] que reinicia el albedo a fresco
+    #[arg(long, default_value_t = 1.0)]
+    albedo_refresh: f64,
 }
 
 fn main() -> Result<()> {
@@ -106,7 +137,14 @@ fn main() -> Result<()> {
         if cli.latitude.is_none() {
             anyhow::bail!("--srf > 0 requiere --latitude para calcular la radiación potencial");
         }
-        Some(solar::Terrain::from_dem(&elevation, &header).context("derivando slope/aspect")?)
+        let horizon = cli.horizon_shading.then_some(HorizonParams {
+            radius: cli.horizon_radius,
+            directions: cli.horizon_directions,
+        });
+        Some(
+            solar::Terrain::from_dem(&elevation, &header, horizon)
+                .context("derivando slope/aspect")?,
+        )
     } else {
         None
     };
@@ -131,6 +169,12 @@ fn main() -> Result<()> {
         lapse_rate: cli.lapse_rate,
         srf: cli.srf,
         albedo: cli.albedo,
+        albedo_decay: cli.albedo_tau.map(|tau| AlbedoDecay {
+            albedo_fresh: cli.albedo_fresh,
+            albedo_min: cli.albedo_min,
+            tau_days: tau,
+            refresh_swe_mm: cli.albedo_refresh,
+        }),
         precip_gradient: cli.precip_gradient,
     };
     let mut model = SnowModel::new(dem, params).context("parámetros inválidos")?;
@@ -138,8 +182,9 @@ fn main() -> Result<()> {
     fs::create_dir_all(&cli.out_dir)
         .with_context(|| format!("no se pudo crear {}", cli.out_dir.display()))?;
 
-    let mut series =
-        String::from("date,snowfall_mm,rain_mm,melt_mm,runoff_mm,swe_mm,snow_cover_fraction\n");
+    let mut series = String::from(
+        "date,snowfall_mm,rain_mm,melt_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction\n",
+    );
     let mut total_melt = 0.0;
     let mut total_precip = 0.0;
     // Cache de radiación potencial por día del año (se repite entre años).
@@ -182,13 +227,14 @@ fn main() -> Result<()> {
         total_precip += rec.precip_mm;
         let _ = writeln!(
             series,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.4}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.4},{:.4}",
             rec.date,
             s.mean_snowfall,
             s.mean_rain,
             s.mean_melt,
             s.mean_runoff,
             s.mean_swe,
+            s.mean_albedo,
             s.snow_cover_fraction
         );
     }

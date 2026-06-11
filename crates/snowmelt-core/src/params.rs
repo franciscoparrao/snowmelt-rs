@@ -2,6 +2,41 @@
 
 use crate::error::{Result, SnowmeltError};
 
+/// Snow albedo decay by age (Verseghy 1991-style exponential).
+///
+/// Albedo relaxes from `albedo_fresh` towards `albedo_min` with e-folding
+/// time `tau_days`, and resets to fresh when a step's snowfall reaches
+/// `refresh_swe_mm`: `α(t) = α_min + (α_fresh − α_min)·exp(−t/τ)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AlbedoDecay {
+    /// Albedo of fresh snow (0–1). Typical: 0.80–0.90.
+    pub albedo_fresh: f64,
+    /// Asymptotic albedo of old snow (0–1). Typical: 0.35–0.50.
+    pub albedo_min: f64,
+    /// E-folding decay time in days. Typical: 4–8.
+    pub tau_days: f64,
+    /// Snowfall per step (mm w.e.) that resets the surface to fresh snow.
+    pub refresh_swe_mm: f64,
+}
+
+impl Default for AlbedoDecay {
+    fn default() -> Self {
+        Self {
+            albedo_fresh: 0.85,
+            albedo_min: 0.4,
+            tau_days: 6.0,
+            refresh_swe_mm: 1.0,
+        }
+    }
+}
+
+impl AlbedoDecay {
+    /// Albedo for snow of age `age_days`. `NaN` for `NaN` input.
+    pub fn albedo(&self, age_days: f64) -> f64 {
+        self.albedo_min + (self.albedo_fresh - self.albedo_min) * (-age_days / self.tau_days).exp()
+    }
+}
+
 /// Parameters of the degree-day (temperature-index) snow model.
 ///
 /// Units: temperatures in °C, degree-day factor in mm w.e. °C⁻¹ day⁻¹,
@@ -28,8 +63,13 @@ pub struct DegreeDayParams {
     /// `0` (default) disables the radiative term (pure degree-day).
     /// Typical daily value: ~0.2 (0.0094 mm h⁻¹ (W m⁻²)⁻¹ · 24).
     pub srf: f64,
-    /// Snow albedo (0–1) used by the radiative melt term. Typical: 0.4–0.8.
+    /// Snow albedo (0–1) used by the radiative melt term when
+    /// [`albedo_decay`](Self::albedo_decay) is `None`. Typical: 0.4–0.8.
     pub albedo: f64,
+    /// Optional age-dependent albedo. When set, the per-cell albedo decays
+    /// with days since the last significant snowfall and `albedo` is
+    /// ignored.
+    pub albedo_decay: Option<AlbedoDecay>,
     /// Orographic precipitation gradient (m⁻¹), applied to uniform forcings:
     /// `p(z) = p_ref · (1 + precip_gradient·(z − z_ref))`, clamped to ≥ 0.
     /// `0` (default) means uniform precipitation. Typical: 0.0002–0.001.
@@ -46,6 +86,7 @@ impl Default for DegreeDayParams {
             lapse_rate: -0.0065,
             srf: 0.0,
             albedo: 0.6,
+            albedo_decay: None,
             precip_gradient: 0.0,
         }
     }
@@ -93,6 +134,40 @@ impl DegreeDayParams {
                 name: "albedo",
                 reason: format!("must be in [0, 1], got {}", self.albedo),
             });
+        }
+        if let Some(decay) = &self.albedo_decay {
+            for (name, value) in [
+                ("albedo_fresh", decay.albedo_fresh),
+                ("albedo_min", decay.albedo_min),
+            ] {
+                if !(0.0..=1.0).contains(&value) {
+                    return Err(SnowmeltError::InvalidParameter {
+                        name,
+                        reason: format!("must be in [0, 1], got {value}"),
+                    });
+                }
+            }
+            if decay.albedo_min > decay.albedo_fresh {
+                return Err(SnowmeltError::InvalidParameter {
+                    name: "albedo_min",
+                    reason: format!(
+                        "albedo_min ({}) must be <= albedo_fresh ({})",
+                        decay.albedo_min, decay.albedo_fresh
+                    ),
+                });
+            }
+            if !decay.tau_days.is_finite() || decay.tau_days <= 0.0 {
+                return Err(SnowmeltError::InvalidParameter {
+                    name: "tau_days",
+                    reason: format!("must be finite and > 0, got {}", decay.tau_days),
+                });
+            }
+            if !decay.refresh_swe_mm.is_finite() || decay.refresh_swe_mm < 0.0 {
+                return Err(SnowmeltError::InvalidParameter {
+                    name: "refresh_swe_mm",
+                    reason: format!("must be finite and >= 0, got {}", decay.refresh_swe_mm),
+                });
+            }
         }
         if self.t_snow > self.t_rain {
             return Err(SnowmeltError::InvalidParameter {

@@ -1,0 +1,17 @@
+[package]
+name = "snowmelt-python"
+description = "Python bindings for the snowmelt-rs distributed snow model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "snowmelt"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+snowmelt-core = { workspace = true }
+ndarray = { workspace = true }
+pyo3 = { version = "0.28", features = ["extension-module", "abi3-py39"] }
+numpy = "0.28"

@@ -13,8 +13,9 @@ Cantus, Criterium.
 
 | Crate | Descripción |
 |---|---|
-| `snowmelt-core` | Modelo sin I/O: estado SWE (`ndarray`), grado-día/ETI, lapse rate, partición lluvia-nieve, gradiente orográfico. Paralelo por celda con Rayon. |
-| `snowmelt-cli` | Binario `snowmelt`: lee DEM (ESRI ASCII Grid) + forzantes CSV, calcula radiación potencial (SurtGIS terrain) y escribe serie agregada + grilla final de SWE. |
+| `snowmelt-core` | Modelo sin I/O: estado SWE (`ndarray`), grado-día/ETI, albedo dinámico por edad, lapse rate, partición lluvia-nieve, gradiente orográfico. Paralelo por celda con Rayon. |
+| `snowmelt-cli` | Binario `snowmelt`: lee DEM (ESRI ASCII Grid) + forzantes CSV, calcula radiación potencial (SurtGIS terrain, con sombreado por horizonte opcional) y escribe serie agregada + grilla final de SWE. |
+| `snowmelt-python` | Bindings PyO3/numpy (`import snowmelt`); compilar con `maturin develop -m crates/snowmelt-python/Cargo.toml`. |
 
 ## Uso rápido
 
@@ -60,8 +61,13 @@ donde `G` es la radiación de cielo despejado (W m⁻² medios diarios)
 calculada desde el DEM vía SurtGIS: slope/aspect (Horn) + geometría solar
 por día del año, con transmitancia simple o turbidez de Linke
 (`--linke-turbidity`). Los bordes del raster (sin vecindario 3×3) se
-rellenan con radiación de terreno plano. Sin sombreado por horizonte en
-v0.2 (`solar_radiation_shadowed` de SurtGIS queda para v0.3).
+rellenan con radiación de terreno plano. Con `--horizon-shading` se
+precalculan ángulos de horizonte y la radiación directa respeta las
+sombras del terreno circundante (memoria ≈ 8·direcciones·celdas bytes).
+
+El albedo puede ser constante (`--albedo`) o dinámico con `--albedo-tau τ`:
+`α(t) = α_min + (α_fresh − α_min)·exp(−t/τ)`, reiniciando a fresco cuando
+la nevada del paso supera `--albedo-refresh` mm.
 
 ### Parámetros (defaults)
 
@@ -79,6 +85,13 @@ v0.2 (`solar_radiation_shadowed` de SurtGIS queda para v0.3).
 | `--latitude` | — | Latitud [°]; requerida si `--srf > 0` |
 | `--transmittance` | 0.7 | Transmitancia atmosférica de cielo despejado |
 | `--linke-turbidity` | — | Turbidez de Linke (reemplaza a transmittance) |
+| `--horizon-shading` | off | Sombreado por horizonte topográfico |
+| `--horizon-radius` | 100 | Radio de búsqueda del horizonte [celdas] |
+| `--horizon-directions` | 36 | Direcciones acimutales del horizonte |
+| `--albedo-tau` | — | τ del decaimiento de albedo [días]; activa el modo dinámico |
+| `--albedo-fresh` | 0.85 | Albedo de nieve fresca (modo dinámico) |
+| `--albedo-min` | 0.4 | Albedo asintótico de nieve vieja (modo dinámico) |
+| `--albedo-refresh` | 1.0 | Nevada [mm] que reinicia el albedo a fresco |
 
 ## API (snowmelt-core)
 
@@ -109,13 +122,26 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Roadmap (v0.3)
+## Python
 
-- Sombreado por horizonte (`solar_radiation_shadowed` de SurtGIS) y albedo
-  con decaimiento por edad de la nieve.
+```python
+import numpy as np, snowmelt
+
+dem = np.loadtxt("dem.txt")           # 2D float64, NaN = nodata
+p = snowmelt.Params(srf=0.2, albedo_tau=6.0)
+m = snowmelt.SnowModel(dem, p)
+out = m.step_uniform(t_ref=-3.0, z_ref=2500.0, precip=10.0,
+                     radiation=np.full(dem.shape, 150.0))
+out["melt"], m.swe(), m.albedo()
+```
+
+Compilación: `pip install maturin && maturin develop --release -m crates/snowmelt-python/Cargo.toml`.
+
+## Roadmap (v0.4)
+
 - Balance de energía completo.
 - Línea de nieves desde percepción remota; validación contra MODIS y caudales DGA.
-- Bindings Python (PyO3) e interfaz de aporte hacia rainflow/Hydroflux.
+- Interfaz de aporte de deshielo hacia rainflow/Hydroflux.
 
 ## Licencia
 

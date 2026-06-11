@@ -8,22 +8,33 @@
 use anyhow::{Context, Result, anyhow};
 use ndarray::{Array2, Zip};
 use surtgis_algorithms::terrain::{
-    AspectOutput, SlopeParams, SlopeUnits, SolarParams, aspect, slope, solar_radiation,
+    AspectOutput, HorizonAngles, HorizonParams, SlopeParams, SlopeUnits, SolarParams, aspect,
+    horizon_angles, slope, solar_radiation, solar_radiation_shadowed,
 };
 use surtgis_core::{GeoTransform, Raster};
 
 use crate::asc::AscHeader;
 
-/// Slope y aspect (radianes) precalculados del DEM.
+/// Slope y aspect (radianes) precalculados del DEM, más los ángulos de
+/// horizonte si se pidió sombreado topográfico.
 pub struct Terrain {
     slope_rad: Raster<f64>,
     aspect_rad: Raster<f64>,
+    horizon: Option<HorizonAngles>,
 }
 
 impl Terrain {
     /// Deriva slope/aspect del DEM (Horn). Los bordes y vecinos de nodata
     /// quedan `NaN`; ver [`Terrain::potential_radiation`] para el relleno.
-    pub fn from_dem(elevation: &Array2<f64>, header: &AscHeader) -> Result<Self> {
+    ///
+    /// Con `horizon: Some(params)` precalcula además los ángulos de
+    /// horizonte (memoria: `8·direcciones·filas·columnas` bytes) y la
+    /// radiación usará sombreado por terreno circundante.
+    pub fn from_dem(
+        elevation: &Array2<f64>,
+        header: &AscHeader,
+        horizon_params: Option<HorizonParams>,
+    ) -> Result<Self> {
         let mut dem = Raster::from_array(elevation.clone());
         // Origen = esquina superior izquierda; alto de píxel negativo.
         let origin_y = header.yll + header.nrows as f64 * header.cellsize;
@@ -42,9 +53,14 @@ impl Terrain {
         )
         .map_err(|e| anyhow!("slope: {e}"))?;
         let aspect_rad = aspect(&dem, AspectOutput::Radians).map_err(|e| anyhow!("aspect: {e}"))?;
+        let horizon = match horizon_params {
+            Some(p) => Some(horizon_angles(&dem, p).map_err(|e| anyhow!("horizon_angles: {e}"))?),
+            None => None,
+        };
         Ok(Self {
             slope_rad,
             aspect_rad,
+            horizon,
         })
     }
 
@@ -71,8 +87,14 @@ impl Terrain {
             albedo,
             ..SolarParams::default()
         };
-        let result = solar_radiation(&self.slope_rad, &self.aspect_rad, params.clone())
-            .map_err(|e| anyhow!("solar_radiation: {e}"))?;
+        let result = match &self.horizon {
+            Some(horizon) => {
+                solar_radiation_shadowed(&self.slope_rad, &self.aspect_rad, params.clone(), horizon)
+                    .map_err(|e| anyhow!("solar_radiation_shadowed: {e}"))?
+            }
+            None => solar_radiation(&self.slope_rad, &self.aspect_rad, params.clone())
+                .map_err(|e| anyhow!("solar_radiation: {e}"))?,
+        };
         let flat = flat_radiation(params).context("radiación de terreno plano")?;
 
         // Wh/m²/día → W/m² medio diario; relleno plano donde corresponde.
@@ -152,7 +174,7 @@ mod tests {
             cellsize: 100.0,
             nodata: -9999.0,
         };
-        let terrain = Terrain::from_dem(&elev, &header).unwrap();
+        let terrain = Terrain::from_dem(&elev, &header, None).unwrap();
         // Solsticio de invierno austral, latitud andina central.
         let rad = terrain
             .potential_radiation(&elev, 172, -33.5, 0.7, None, 0.6)
@@ -167,5 +189,51 @@ mod tests {
         let mean: f64 = rad.iter().filter(|v| v.is_finite()).sum::<f64>()
             / rad.iter().filter(|v| v.is_finite()).count() as f64;
         assert!(mean > 10.0 && mean < 500.0, "media {mean}");
+    }
+
+    #[test]
+    fn horizon_shading_never_increases_radiation() {
+        // Valle profundo: paredes altas al este y oeste, fondo plano.
+        let elev = Array2::from_shape_fn((7, 7), |(_, j)| {
+            let d = (j as f64 - 3.0).abs();
+            1000.0 + 800.0 * d
+        });
+        let header = AscHeader {
+            ncols: 7,
+            nrows: 7,
+            xll: 0.0,
+            yll: 0.0,
+            cellsize: 30.0,
+            nodata: -9999.0,
+        };
+        let plain = Terrain::from_dem(&elev, &header, None).unwrap();
+        let shaded = Terrain::from_dem(
+            &elev,
+            &header,
+            Some(HorizonParams {
+                radius: 6,
+                directions: 36,
+            }),
+        )
+        .unwrap();
+        let rad_plain = plain
+            .potential_radiation(&elev, 172, -33.5, 0.7, None, 0.6)
+            .unwrap();
+        let rad_shaded = shaded
+            .potential_radiation(&elev, 172, -33.5, 0.7, None, 0.6)
+            .unwrap();
+        // El sombreado solo puede quitar radiación directa, nunca agregar.
+        let mut some_reduction = false;
+        for (p, s) in rad_plain.iter().zip(rad_shaded.iter()) {
+            if p.is_finite() && s.is_finite() {
+                assert!(*s <= *p + 1e-9, "shaded {s} > plain {p}");
+                if *s < *p - 1e-6 {
+                    some_reduction = true;
+                }
+            }
+        }
+        // El fondo del valle (paredes de ~25° sobre el horizonte en
+        // invierno austral) debe perder algo de beam.
+        assert!(some_reduction, "el valle no registró sombreado alguno");
     }
 }

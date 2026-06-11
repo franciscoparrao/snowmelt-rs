@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 — 2026-06-11
+
+### Agregado
+- **Albedo dinámico por edad de la nieve** (`AlbedoDecay`, opcional en
+  `DegreeDayParams.albedo_decay`): decaimiento exponencial
+  `α(t) = α_min + (α_fresh − α_min)·exp(−t/τ)` con reinicio a fresco
+  cuando la nevada del paso supera `refresh_swe_mm`. Accessors
+  `SnowModel::albedo()` y `snow_age()`; `StepSummary.mean_albedo` y
+  columna `albedo` en `series.csv`. Flags: `--albedo-tau`,
+  `--albedo-fresh`, `--albedo-min`, `--albedo-refresh`.
+- **Sombreado por horizonte topográfico** (cast shadows): precálculo de
+  ángulos de horizonte (SurtGIS `horizon_angles`) y uso de
+  `solar_radiation_shadowed`. Flags: `--horizon-shading`,
+  `--horizon-radius`, `--horizon-directions`.
+- **Bindings Python (PyO3 + numpy, abi3-py39)**: crate `snowmelt-python`
+  con `Params`, `SnowModel` (`step_uniform`, `step_distributed`, `swe()`,
+  `albedo()`, `snow_age()`); grillas numpy float64 con NaN = nodata.
+  Compilar con `maturin develop -m crates/snowmelt-python/Cargo.toml`.
+
+### Cambiado
+- El paso del modelo se reorganizó en 4 pases paralelos (partición →
+  edad/albedo → acumulación+melt → lluvia); sin cambio de resultados.
+- `StepSummary` agrega `mean_albedo` (breaking para construcción por
+  literal).
+
 ## 0.2.0 — 2026-06-10
 
 ### Agregado

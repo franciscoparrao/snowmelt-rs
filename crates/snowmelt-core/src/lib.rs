@@ -39,4 +39,4 @@ pub use dem::Dem;
 pub use error::{Result, SnowmeltError};
 pub use forcing::Forcing;
 pub use model::{SNOW_COVER_THRESHOLD_MM, SnowModel, StepOutput, StepSummary};
-pub use params::DegreeDayParams;
+pub use params::{AlbedoDecay, DegreeDayParams};
