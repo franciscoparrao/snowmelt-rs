@@ -2,11 +2,12 @@
 
 Motor de balance nival distribuido sobre DEM, en Rust. Tres modos de
 derretimiento — grado-día, ETI (Pellicciotti et al. 2005) y balance de
-energía completo con cold content — con acumulación/ablación de SWE por
-celda, partición lluvia-nieve por temperatura, albedo dinámico por edad,
-gradiente orográfico de precipitación y radiación potencial derivada del
-terreno (SurtGIS, con sombreado por horizonte), orientado a hidrología
-andina.
+energía completo (cold content, nubosidad, rain-on-snow, sublimación) —
+con acumulación/ablación de SWE por celda, partición lluvia-nieve por
+temperatura, albedo dinámico por edad, gradiente orográfico de
+precipitación y radiación potencial derivada del terreno (SurtGIS, con
+sombreado por horizonte), orientado a hidrología andina. Validado contra
+MODIS en una cuenca andina (F1 0.83).
 
 Parte de la familia de motores Rust: SurtGIS, Hydroflux, Smelt, Anvil,
 Cantus, Criterium.
@@ -80,13 +81,17 @@ energía (W m⁻²) en vez del índice de temperatura:
 Q = (1 − α)·G + LW_in − LW_out + Q_H + Q_E + Q_G
 ```
 
-con onda larga de Brutsaert (1975) y superficie a `min(T_a, 0 °C)`,
+donde `Q_R` (calor de lluvia sobre nieve) entra cuando hay precipitación
+líquida. Onda larga de Brutsaert (1975) y superficie a `min(T_a, 0 °C)`,
 flujos turbulentos bulk (`--wind`, `--rh`, `--exchange-coeff`), presión
 del aire desde la elevación de cada celda y calor de suelo
-(`--ground-heat`). El pack acumula **cold content** en días de balance
+(`--ground-heat`). La **nubosidad efectiva** (`--cloud-fraction N`)
+atenúa la onda corta `(1 − 0.75·N³)` y refuerza la onda larga entrante
+`(1 + 0.22·N²)`. El pack acumula **cold content** en días de balance
 negativo (cap `c_ice·SWE·t_cold_max`) y la energía positiva lo paga
-antes de derretir (L_f = 334 kJ/kg). Simplificaciones v0.4: sin calor de
-lluvia sobre nieve, sin pérdida de masa por sublimación, cielo despejado.
+antes de derretir (L_f = 334 kJ/kg). El flujo latente negativo retira
+masa por **sublimación** (L_s = 2.834 MJ/kg), reportada aparte; balance
+de masa por celda: `Δswe = nieve − derretimiento − sublimación`.
 
 ### Parámetros (defaults)
 
@@ -118,6 +123,7 @@ lluvia sobre nieve, sin pérdida de masa por sublimación, cielo despejado.
 | `--exchange-coeff` | 0.0015 | Coef. de intercambio turbulento (modo EB) |
 | `--ground-heat` | 1.0 | Calor de suelo [W/m²] (modo EB) |
 | `--t-cold-max` | 10.0 | Enfriamiento máximo del pack [K] (cold content) |
+| `--cloud-fraction` | 0.0 | Fracción efectiva de nubes 0–1 (modo EB) |
 
 ## API (snowmelt-core)
 
@@ -165,10 +171,10 @@ Compilación: `pip install maturin && maturin develop --release -m crates/snowme
 
 ## Validación
 
-Primera validación contra MODIS MOD10A1 en la cuenca alta del Maipo
-(temporada 2019, modelo sin calibrar, balance de energía + albedo
-dinámico): **accuracy 85.5%, F1 0.83, bias 1.07** sobre 5 fechas
-despejadas (julio: F1 0.92). Pipeline reproducible y análisis en
+Validación contra MODIS MOD10A1 en la cuenca alta del Maipo (temporada
+2019, balance de energía + albedo dinámico): **accuracy 85.4%, F1 0.83,
+recall 0.90** calibrado (sin calibrar F1 0.81; julio F1 0.92). Pipeline
+reproducible, grid search de calibración y análisis de sesgos en
 [`validation/maipo-alto/`](validation/maipo-alto/README.md). El binario
 `snowmelt-validate` calcula las métricas:
 
@@ -176,13 +182,14 @@ despejadas (julio: F1 0.92). Pipeline reproducible y análisis en
 snowmelt-validate out/cover_2019-07-15.asc:data/modis_2019-07-15.asc ...
 ```
 
-## Roadmap (v0.6)
+## Roadmap (v0.7)
 
-- Calibración (t_cold_max, albedo_min/τ, nubosidad efectiva) guiada por
-  los sesgos estacionales detectados en la validación.
+- Forzante de temperatura distribuida (grilla ERA5/CR2MET) para corregir
+  el sesgo estructural de elevaciones bajas.
 - Validación de caudales contra estaciones DGA; interfaz hacia
   rainflow/Hydroflux.
-- Calor de lluvia sobre nieve y sublimación con pérdida de masa.
+- Sublimación con resistencia aerodinámica explícita y balance de masa
+  multi-año.
 
 ## Licencia
 

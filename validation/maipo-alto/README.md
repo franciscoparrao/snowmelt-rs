@@ -31,25 +31,49 @@ snowmelt --dem data/dem.asc --forcing data/forcing.csv \
 
 Celda cubierta si SWE ≥ 10 mm (comparable a detección NDSI ≥ 0.4).
 
-## Resultados (v0.5.0, sin calibración)
+## Resultados (v0.6.0)
+
+Balance de energía + albedo dinámico. Dos configuraciones:
+
+**Sin calibrar** (defaults; `--albedo-tau 6`):
 
 ```
-par                        celdas      TP      FP      FN      TN  accuracy precision    recall        F1    bias
-cover_2019-07-15            34435   19022    1910    1386   12117    0.9043    0.9088    0.9321    0.9203   1.026
-cover_2019-08-08            29944   12719    2443    1023   13759    0.8843    0.8389    0.9256    0.8801   1.103
-cover_2019-09-08            35793   16347    9118       0   10328    0.7453    0.6419    1.0000    0.7819   1.558
-cover_2019-10-15            35602    9791     227    6175   19409    0.8202    0.9773    0.6132    0.7536   0.627
-cover_2019-11-10            36661    1801    1363    1332   32165    0.9265    0.5692    0.5748    0.5720   1.010
-TOTAL                      172435   59680   15061    9916   87778    0.8552    0.7985    0.8575    0.8270   1.074
+par                        accuracy precision    recall        F1    bias
+cover_2019-07-15             0.9028    0.9162    0.9202    0.9182   1.004
+cover_2019-08-08             0.8882    0.8526    0.9145    0.8825   1.073
+cover_2019-09-08             0.7518    0.6479    0.9999    0.7863   1.543
+cover_2019-10-15             0.7806    0.9859    0.5181    0.6793   0.525
+cover_2019-11-10             0.9294    0.6469    0.3824    0.4806   0.591
+TOTAL                        0.8493    0.8084    0.8213    0.8148   1.016
 ```
 
-**Lectura**: pleno invierno excelente (F1 0.92 en julio); inicio de
-primavera sobreestima extensión (bias 1.56, recall 1.0 en septiembre:
-derrite lento en elevaciones medias) y a mediados de octubre el sesgo se
-invierte (bias 0.63: el pack simulado se agota más rápido que el
-observado, consistente con albedo decayendo a α_min y LW de cielo
-despejado). El cruce sugiere calibrar `t_cold_max`, `albedo_min`/τ y la
-nubosidad efectiva.
+**Calibrado** (`--albedo-tau 9 --albedo-min 0.4`, vía `calibrate.py`):
+
+```
+par                        accuracy precision    recall        F1    bias
+cover_2019-07-15             0.9024    0.9001    0.9396    0.9194   1.044
+cover_2019-08-08             0.8762    0.8189    0.9376    0.8742   1.145
+cover_2019-09-08             0.7518    0.6479    0.9999    0.7863   1.543
+cover_2019-10-15             0.8568    0.9625    0.7083    0.8161   0.736
+cover_2019-11-10             0.8866    0.4181    0.8353    0.5573   1.998
+TOTAL                        0.8538    0.7765    0.8956    0.8318   1.153
+```
+
+**Lectura**: pleno invierno excelente (F1 0.92 en julio). La calibración
+sube el F1 agregado 0.815 → 0.832 (accuracy 85.4%, recall 0.82 → 0.90):
+un albedo de nieve vieja que decae más lento (τ 6 → 9 días) frena la
+ablación de primavera y rescata octubre (F1 0.68 → 0.82, bias 0.53 →
+0.74). El grid search (4×3×4 combos sobre τ, α_min, nubosidad) confirma
+que la nubosidad efectiva no mejora el F1 agregado: atenúa la onda corta
+de forma uniforme y el óptimo queda en cielo despejado.
+
+**Sesgo estructural de septiembre**: el bias 1.54 / recall 1.0 de
+septiembre es **invariante a todos los parámetros del grid** — el modelo
+mantiene nieve en elevaciones bajas donde MODIS ya no la ve. No es un
+problema de derretimiento sino del forzante de temperatura: un único
+punto ERA5 extrapolado con lapse rate fijo (−6.5 °C/km) subestima el
+calor en las laderas bajas. Lo corregirá una temperatura distribuida
+(grilla ERA5/CR2MET tas), no la calibración del balance de energía.
 
 ## Caveats
 
@@ -63,7 +87,13 @@ nubosidad efectiva.
 ## Reproducir
 
 ```bash
-python3 fetch_data.py all     # DEM + forzantes + MODIS (≈2 min)
-# luego el comando snowmelt de arriba, y:
-snowmelt-validate out/cover_F.asc:data/modis_F.asc ...
+python3 fetch_data.py all      # DEM + forzantes + MODIS (≈2 min)
+# corrida calibrada:
+snowmelt --dem data/dem.asc --forcing data/forcing.csv --out-dir out \
+  --z-ref 3117 --energy-balance --latitude -33.675 \
+  --albedo-tau 9 --albedo-min 0.4 --cover-threshold 10 \
+  --snapshot-dates 2019-07-15,2019-08-08,2019-09-08,2019-10-15,2019-11-10
+snowmelt-validate out/cover_2019-07-15.asc:data/modis_2019-07-15.asc ...
+# o el grid search completo:
+python3 calibrate.py --top 8
 ```

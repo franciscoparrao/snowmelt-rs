@@ -151,6 +151,11 @@ struct Cli {
     #[arg(long, default_value_t = 10.0)]
     t_cold_max: f64,
 
+    /// Fracción efectiva de nubes (0-1): atenúa SW (1−0.75·N³) y aumenta
+    /// LW entrante (1+0.22·N²) (modo balance de energía)
+    #[arg(long, default_value_t = 0.0)]
+    cloud_fraction: f64,
+
     /// Fechas (de la serie de forzantes) en que escribir snapshots
     /// swe_FECHA.asc y cover_FECHA.asc, separadas por coma
     #[arg(long, value_delimiter = ',')]
@@ -223,6 +228,7 @@ fn main() -> Result<()> {
             exchange_coeff: cli.exchange_coeff,
             ground_heat: cli.ground_heat,
             t_cold_max: cli.t_cold_max,
+            cloud_fraction: cli.cloud_fraction,
         }),
         precip_gradient: cli.precip_gradient,
     };
@@ -232,7 +238,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("no se pudo crear {}", cli.out_dir.display()))?;
 
     let mut series = String::from(
-        "date,snowfall_mm,rain_mm,melt_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction\n",
+        "date,snowfall_mm,rain_mm,melt_mm,sublimation_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction\n",
     );
     let snapshot_dates: HashSet<&str> = cli.snapshot_dates.iter().map(String::as_str).collect();
     let mut total_melt = 0.0;
@@ -277,11 +283,12 @@ fn main() -> Result<()> {
         total_precip += rec.precip_mm;
         let _ = writeln!(
             series,
-            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.4},{:.4}",
+            "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.4},{:.4}",
             rec.date,
             s.mean_snowfall,
             s.mean_rain,
             s.mean_melt,
+            s.mean_sublimation,
             s.mean_runoff,
             s.mean_swe,
             s.mean_albedo,

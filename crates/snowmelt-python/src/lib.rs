@@ -31,7 +31,8 @@ impl PyParams {
         lapse_rate=-0.0065, srf=0.0, albedo=0.6, precip_gradient=0.0,
         albedo_tau=None, albedo_fresh=0.85, albedo_min=0.4, albedo_refresh=1.0,
         energy_balance=false, wind=2.0, rh=0.6, snow_emissivity=0.98,
-        exchange_coeff=0.0015, ground_heat=1.0, t_cold_max=10.0))]
+        exchange_coeff=0.0015, ground_heat=1.0, t_cold_max=10.0,
+        cloud_fraction=0.0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         ddf: f64,
@@ -53,6 +54,7 @@ impl PyParams {
         exchange_coeff: f64,
         ground_heat: f64,
         t_cold_max: f64,
+        cloud_fraction: f64,
     ) -> PyResult<Self> {
         let inner = core::DegreeDayParams {
             ddf,
@@ -75,6 +77,7 @@ impl PyParams {
                 exchange_coeff,
                 ground_heat,
                 t_cold_max,
+                cloud_fraction,
             }),
             precip_gradient,
         };
@@ -190,6 +193,7 @@ fn step_output_dict<'py>(py: Python<'py>, out: &core::StepOutput) -> PyResult<Bo
     d.set_item("snowfall", out.snowfall.to_pyarray(py))?;
     d.set_item("rain", out.rain.to_pyarray(py))?;
     d.set_item("melt", out.melt.to_pyarray(py))?;
+    d.set_item("sublimation", out.sublimation.to_pyarray(py))?;
     d.set_item("runoff", out.runoff().to_pyarray(py))?;
     Ok(d)
 }

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.0 — 2026-06-13
+
+### Agregado
+- **Física del balance de energía completa**:
+  - *Nubosidad efectiva* (`EnergyBalanceParams.cloud_fraction`, flag
+    `--cloud-fraction`): atenúa la onda corta `(1 − 0.75·N³)` y aumenta la
+    emisividad atmosférica de onda larga `(1 + 0.22·N²)`.
+  - *Calor de lluvia sobre nieve*: la lluvia a temperatura del aire aporta
+    `c_w·P_liq·max(T,0)` al balance (advección).
+  - *Sublimación con pérdida de masa*: el flujo latente negativo retira SWE
+    (`L_s = 2.834 MJ/kg`); nueva salida `StepOutput.sublimation`,
+    `StepSummary.mean_sublimation`, columna `sublimation_mm` en `series.csv`
+    y clave `sublimation` en Python. Balance de masa:
+    `Δswe = snowfall − melt − sublimation`.
+- **Calibración contra MODIS** (`validation/maipo-alto/calibrate.py`): grid
+  search sobre τ de albedo, α_min, nubosidad y cold content, evaluado con
+  `snowmelt-validate`. En el Maipo alto sube el F1 agregado **0.815 →
+  0.832** (accuracy 85.4%, recall 0.82 → 0.90) con `--albedo-tau 9
+  --albedo-min 0.4`. Documenta el sesgo estructural de septiembre como
+  limitación del forzante de temperatura de punto único.
+
+### Cambiado
+- `net_energy` → `energy_fluxes` (devuelve `(total, latente)` y recibe
+  lluvia + `dt`); `StepOutput` y `StepSummary` ganan campos de sublimación
+  (breaking para construcción por literal).
+
 ## 0.5.0 — 2026-06-11
 
 ### Agregado

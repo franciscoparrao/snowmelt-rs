@@ -15,7 +15,7 @@ pub const SNOW_COVER_THRESHOLD_MM: f64 = 0.1;
 /// Per-cell fluxes produced by one model step (all in mm w.e.).
 ///
 /// Mass balance per cell and step: `snowfall + rain == precip` and
-/// `Δswe == snowfall - melt`. Nodata cells are `NaN`.
+/// `Δswe == snowfall - melt - sublimation`. Nodata cells are `NaN`.
 #[derive(Debug)]
 pub struct StepOutput {
     /// Solid precipitation added to the snowpack (mm).
@@ -24,6 +24,8 @@ pub struct StepOutput {
     pub rain: Array2<f64>,
     /// Snowmelt released from the snowpack (mm).
     pub melt: Array2<f64>,
+    /// Sublimation mass loss (mm; non-zero only in energy-balance mode).
+    pub sublimation: Array2<f64>,
 }
 
 impl StepOutput {
@@ -42,6 +44,8 @@ pub struct StepSummary {
     pub mean_rain: f64,
     /// Mean melt (mm).
     pub mean_melt: f64,
+    /// Mean sublimation loss (mm; energy-balance mode).
+    pub mean_sublimation: f64,
     /// Mean runoff = rain + melt (mm).
     pub mean_runoff: f64,
     /// Mean SWE after the step (mm).
@@ -70,8 +74,8 @@ pub struct SnowModel {
     cold_content: Array2<f64>,
     /// Air pressure per cell (Pa), derived once from elevation.
     pressure_buf: Array2<f64>,
-    /// Scratch: net energy flux (W m⁻²) in energy-balance mode.
-    q_buf: Array2<f64>,
+    /// Scratch: `(total, latent)` energy fluxes (W m⁻²) in energy-balance mode.
+    energy_buf: Array2<[f64; 2]>,
     temp_buf: Array2<f64>,
     precip_buf: Array2<f64>,
     rad_zero: Array2<f64>,
@@ -107,7 +111,7 @@ impl SnowModel {
                 f64::NAN
             }
         });
-        let q_buf = Array2::zeros(dem.shape());
+        let energy_buf = Array2::from_elem(dem.shape(), [0.0, 0.0]);
         let temp_buf = Array2::zeros(dem.shape());
         let precip_buf = Array2::zeros(dem.shape());
         let rad_zero = Array2::zeros(dem.shape());
@@ -119,7 +123,7 @@ impl SnowModel {
             albedo_buf,
             cold_content,
             pressure_buf,
-            q_buf,
+            energy_buf,
             temp_buf,
             precip_buf,
             rad_zero,
@@ -280,11 +284,16 @@ impl SnowModel {
             }
         };
 
-        // Pass 1: rain–snow partition.
+        // Pass 1: rain–snow partition (rain is independent of melt, so it
+        // can feed the rain-on-snow term of the energy balance).
         Zip::from(&mut snowfall)
             .and(temp)
             .and(precip)
             .par_for_each(|s, &t, &p| *s = p * params.snow_fraction(t));
+        Zip::from(&mut rain)
+            .and(precip)
+            .and(&snowfall)
+            .par_for_each(|r, &p, &s| *r = p - s);
 
         // Pass 2: snow age and albedo (only in decay mode; otherwise
         // `albedo_buf` keeps the constant set at construction).
@@ -308,42 +317,51 @@ impl SnowModel {
         }
 
         // Pass 3: accumulation and melt.
+        let mut sublimation = Array2::zeros(shape);
         match params.energy_balance {
             Some(eb) => {
-                // 3a: net energy flux per cell (W/m²).
-                Zip::from(&mut self.q_buf)
+                // 3a: `(total, latent)` energy fluxes per cell (W/m²).
+                Zip::from(&mut self.energy_buf)
                     .and(temp)
                     .and(rad)
                     .and(&self.albedo_buf)
                     .and(&self.pressure_buf)
-                    .par_for_each(|q, &t, &g, &albedo, &press| {
-                        *q = if t.is_finite()
+                    .and(&rain)
+                    .par_for_each(|e, &t, &g, &albedo, &press, &r| {
+                        *e = if t.is_finite()
                             && g.is_finite()
                             && albedo.is_finite()
                             && press.is_finite()
+                            && r.is_finite()
                         {
-                            energy::net_energy(&eb, t, g, albedo, press)
+                            let (q, q_e) =
+                                energy::energy_fluxes(&eb, t, g, albedo, press, r, dt_days);
+                            [q, q_e]
                         } else {
-                            f64::NAN
+                            [f64::NAN, f64::NAN]
                         };
                     });
-                // 3b: cold content and melt.
+                // 3b: cold content, melt, and sublimation mass loss.
                 Zip::from(&mut self.swe)
-                    .and(&self.q_buf)
+                    .and(&self.energy_buf)
                     .and(&snowfall)
                     .and(&mut self.cold_content)
                     .and(&mut melt)
-                    .par_for_each(|swe, &q, &s, cold, m| {
+                    .and(&mut sublimation)
+                    .par_for_each(|swe, &[q, q_e], &s, cold, m, sub| {
                         if !swe.is_finite() || !q.is_finite() || !s.is_finite() {
                             *swe = f64::NAN;
                             *cold = f64::NAN;
                             *m = f64::NAN;
+                            *sub = f64::NAN;
                             return;
                         }
                         *swe += s;
                         let potential = energy::apply_energy(&eb, q, dt_days, *swe, cold);
                         *m = potential.min(*swe);
                         *swe -= *m;
+                        *sub = energy::sublimation_mm(q_e, dt_days).min(*swe);
+                        *swe -= *sub;
                     });
             }
             None => {
@@ -356,19 +374,23 @@ impl SnowModel {
                     .par_for_each(|swe, &t, &g, &albedo, &s, m| {
                         *m = melt_cell(&params, dt_days, swe, t, g, albedo, s);
                     });
+                // Sin sublimación en modo índice de temperatura; propagar
+                // nodata para consistencia con el resto de las salidas.
+                Zip::from(&mut sublimation)
+                    .and(&melt)
+                    .par_for_each(|sub, &m| {
+                        if !m.is_finite() {
+                            *sub = f64::NAN;
+                        }
+                    });
             }
         }
-
-        // Pass 4: rain is what did not fall as snow.
-        Zip::from(&mut rain)
-            .and(precip)
-            .and(&snowfall)
-            .par_for_each(|r, &p, &s| *r = p - s);
 
         Ok(StepOutput {
             snowfall,
             rain,
             melt,
+            sublimation,
         })
     }
 
@@ -411,6 +433,7 @@ impl SnowModel {
         let mean_snowfall = nan_mean(&out.snowfall);
         let mean_rain = nan_mean(&out.rain);
         let mean_melt = nan_mean(&out.melt);
+        let mean_sublimation = nan_mean(&out.sublimation);
         let mean_swe = nan_mean(&self.swe);
         let mean_albedo = nan_mean(&self.albedo_buf);
         let (covered, valid) = self
@@ -429,6 +452,7 @@ impl SnowModel {
             mean_snowfall,
             mean_rain,
             mean_melt,
+            mean_sublimation,
             mean_runoff: mean_rain + mean_melt,
             mean_swe,
             mean_albedo,
@@ -1022,6 +1046,39 @@ mod tests {
             .unwrap();
         assert!(approx(out.melt[[0, 0]], 3.0));
         assert!(approx(m.swe()[[0, 0]], 0.0));
+    }
+
+    #[test]
+    fn energy_balance_sublimation_removes_mass_and_balance_closes() {
+        use crate::energy::EnergyBalanceParams;
+        let params = DegreeDayParams {
+            energy_balance: Some(EnergyBalanceParams {
+                wind_speed: 5.0,
+                rel_humidity: 0.2, // aire seco → sublimación fuerte
+                ..Default::default()
+            }),
+            ..DegreeDayParams::default()
+        };
+        let mut m =
+            SnowModel::with_initial_swe(flat_dem(1, 1, 4000.0), params, array![[300.0]]).unwrap();
+        let cold_dry = Forcing::Uniform {
+            t_ref: -10.0,
+            z_ref: 4000.0,
+            precip: 0.0,
+        };
+        let mut total_subl = 0.0;
+        let mut total_melt = 0.0;
+        for _ in 0..10 {
+            let out = m
+                .step_radiation(&cold_dry, Some(array![[100.0]].view()), 1.0)
+                .unwrap();
+            total_subl += out.sublimation[[0, 0]];
+            total_melt += out.melt[[0, 0]];
+        }
+        assert!(total_subl > 1.0, "sublimación = {total_subl}");
+        // Balance de masa: SWE_0 = SWE_f + melt + sublimación (precip 0).
+        let balance = m.swe()[[0, 0]] + total_melt + total_subl;
+        assert!((balance - 300.0).abs() < 1e-9, "balance = {balance}");
     }
 
     #[test]
