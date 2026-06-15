@@ -11,7 +11,11 @@ Genera en data/:
                            (NDSI_Snow_Cover >= 40 → 1, < 40 → 0,
                            nubes/fill → NODATA), misma grilla del DEM.
 
-Uso: python3 fetch_data.py [dem|forcing|modis|all]
+  - grids/precip_YYYY-MM-DD.asc   Precipitación diaria CR2MET v2.5
+                           regrillada a la malla del DEM (mm), para el
+                           forzante distribuido (--precip-grids).
+
+Uso: python3 fetch_data.py [dem|forcing|modis|grids|all]
 """
 
 import json
@@ -203,6 +207,135 @@ def fetch_modis():
         )
 
 
+# Gradiente orográfico fraccional de precipitación para el downscaling de
+# subgrilla [1/m]. Realza CR2MET por la anomalía de elevación que su malla
+# gruesa (0.05°) no resuelve. Típico andino 0.0005–0.001.
+OROG_GAMMA = 0.0008
+
+
+def coarse_elevation():
+    """Elevación 'vista' por la malla CR2MET (0.05°): el DEM promediado a
+    esa resolución y vuelto a la malla fina. La diferencia DEM − coarse es
+    la anomalía de subgrilla que CR2MET no resuelve."""
+    import rasterio
+    from rasterio.warp import reproject, Resampling
+
+    dem_tif = os.path.join(DATA, "dem.tif")
+    coarse_tif = os.path.join(DATA, "dem_coarse005.tif")
+    fine_back = os.path.join(DATA, "dem_coarse005_fine.tif")
+    # DEM → 0.05° en EPSG:4326 (promedio), luego de vuelta a la malla del DEM.
+    subprocess.run(
+        ["gdalwarp", "-q", "-overwrite", "-t_srs", "EPSG:4326",
+         "-tr", "0.05", "0.05", "-r", "average", dem_tif, coarse_tif],
+        check=True,
+    )
+    with rasterio.open(dem_tif) as ref:
+        dst = np.full((ref.height, ref.width), np.nan)
+        with rasterio.open(coarse_tif) as src:
+            reproject(
+                source=src.read(1), destination=dst,
+                src_transform=src.transform, src_crs=src.crs,
+                dst_transform=ref.transform, dst_crs=ref.crs,
+                resampling=Resampling.bilinear,
+            )
+    for f in (coarse_tif, fine_back):
+        if os.path.exists(f):
+            os.remove(f)
+    return dst
+
+
+def fetch_precip_grids():
+    """Regrilla CR2MET diario a la malla del DEM con downscaling orográfico
+    de subgrilla → grids/precip_DATE.asc.
+
+    CR2MET (0.05°) se interpola bilinealmente y luego se realza por la
+    anomalía de elevación de subgrilla: P = P_coarse·(1 + γ·(z − z_coarse)),
+    de modo que las cumbres reciben más y los valles menos dentro de cada
+    celda CR2MET (la media gruesa se preserva). Corrige el gradiente
+    orográfico que la malla de 5 km no resuelve.
+    """
+    print("Grillas de precipitación CR2MET + downscaling orográfico → DEM...")
+    import xarray as xr
+    import rasterio
+    from rasterio.warp import reproject, Resampling
+    from rasterio.transform import from_origin
+
+    dem_fine, _ = tif_to_array(os.path.join(DATA, "dem.tif"))
+    z_coarse = coarse_elevation()
+    # Factor de realce orográfico (>= 0), 1 donde no hay anomalía.
+    orog = np.where(
+        np.isfinite(dem_fine) & np.isfinite(z_coarse),
+        np.maximum(1.0 + OROG_GAMMA * (dem_fine - z_coarse), 0.0),
+        1.0,
+    )
+
+    # Geometría destino desde el DEM (.asc).
+    _, (x_left, y_top, cs) = tif_to_array(os.path.join(DATA, "dem.tif"))
+    with rasterio.open(os.path.join(DATA, "dem.tif")) as ref:
+        dst_shape = (ref.height, ref.width)
+        dst_transform = ref.transform
+        dst_crs = ref.crs
+
+    grids_dir = os.path.join(DATA, "grids")
+    os.makedirs(grids_dir, exist_ok=True)
+
+    # Fechas de la serie de forzantes.
+    with open(os.path.join(DATA, "forcing.csv")) as f:
+        next(f)
+        dates = [line.split(",")[0] for line in f if line.strip()]
+    months = sorted({d[:7] for d in dates})
+
+    src_crs = "EPSG:4326"
+    n = 0
+    for ym in months:
+        y, m = ym.split("-")
+        path = os.path.join(CR2MET_DIR, f"CR2MET_pr_v2.5_day_{y}_{m}_005deg.nc")
+        ds = xr.open_dataset(path)
+        var = "pr" if "pr" in ds else list(ds.data_vars)[0]
+        da = ds[var]
+        lat_name = "lat" if "lat" in da.dims else "latitude"
+        lon_name = "lon" if "lon" in da.dims else "longitude"
+        lats = ds[lat_name].values
+        lons = ds[lon_name].values
+        res_lat = abs(float(lats[1] - lats[0]))
+        res_lon = abs(float(lons[1] - lons[0]))
+        # Transform de la grilla CR2MET (origen esquina superior izquierda).
+        src_transform = from_origin(
+            float(lons.min()) - res_lon / 2,
+            float(lats.max()) + res_lat / 2,
+            res_lon,
+            res_lat,
+        )
+        flip = lats[0] < lats[-1]  # lat ascendente → voltear a N-arriba
+        tname = "time" if "time" in da.dims else da.dims[0]
+        day_strs = [str(t)[:10] for t in ds[tname].values]
+        for i, d in enumerate(day_strs):
+            if d not in dates:
+                continue
+            src = da.isel({tname: i}).values.astype("float64")
+            if flip:
+                src = src[::-1, :]
+            dst = np.full(dst_shape, np.nan)
+            reproject(
+                source=src,
+                destination=dst,
+                src_transform=src_transform,
+                src_crs=src_crs,
+                dst_transform=dst_transform,
+                dst_crs=dst_crs,
+                resampling=Resampling.bilinear,
+                src_nodata=np.nan,
+                dst_nodata=np.nan,
+            )
+            dst = np.where(np.isfinite(dst), np.maximum(dst * orog, 0.0), np.nan)
+            write_asc(
+                os.path.join(grids_dir, f"precip_{d}.asc"), dst, x_left, y_top, cs
+            )
+            n += 1
+        ds.close()
+    print(f"  {n} grillas precip_*.asc en {grids_dir} (γ_orog={OROG_GAMMA})")
+
+
 if __name__ == "__main__":
     os.makedirs(DATA, exist_ok=True)
     what = sys.argv[1] if len(sys.argv) > 1 else "all"
@@ -212,3 +345,5 @@ if __name__ == "__main__":
         fetch_forcing()
     if what in ("modis", "all"):
         fetch_modis()
+    if what in ("grids", "all"):
+        fetch_precip_grids()

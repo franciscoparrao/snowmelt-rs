@@ -165,6 +165,39 @@ struct Cli {
     /// en los snapshots cover_FECHA.asc
     #[arg(long, default_value_t = 1.0)]
     cover_threshold: f64,
+
+    /// Directorio con grillas diarias de precipitación distribuida
+    /// `precip_FECHA.asc` (mm, misma malla del DEM). Reemplaza la
+    /// precipitación uniforme del CSV; el CSV solo aporta las fechas.
+    #[arg(long)]
+    precip_grids: Option<PathBuf>,
+
+    /// Directorio con grillas diarias de temperatura distribuida
+    /// `temp_FECHA.asc` (°C, misma malla del DEM). Reemplaza la
+    /// extrapolación por lapse rate del valor del CSV.
+    #[arg(long)]
+    temp_grids: Option<PathBuf>,
+}
+
+/// Lee una grilla diaria `<prefix>_<date>.asc` del directorio y valida su
+/// forma contra el DEM.
+fn read_daily_grid(
+    dir: &std::path::Path,
+    prefix: &str,
+    date: &str,
+    shape: (usize, usize),
+) -> Result<Array2<f64>> {
+    let path = dir.join(format!("{prefix}_{date}.asc"));
+    let grid = asc::read(&path).with_context(|| format!("leyendo {}", path.display()))?;
+    if grid.data.dim() != shape {
+        anyhow::bail!(
+            "{}: forma {:?} no coincide con el DEM {:?}",
+            path.display(),
+            grid.data.dim(),
+            shape
+        );
+    }
+    Ok(grid.data)
 }
 
 fn main() -> Result<()> {
@@ -241,15 +274,39 @@ fn main() -> Result<()> {
         "date,snowfall_mm,rain_mm,melt_mm,sublimation_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction\n",
     );
     let snapshot_dates: HashSet<&str> = cli.snapshot_dates.iter().map(String::as_str).collect();
+    let shape = model.dem().shape();
+    let distributed = cli.precip_grids.is_some() || cli.temp_grids.is_some();
+    if distributed {
+        eprintln!("forzante distribuido: usando grillas diarias por fecha");
+    }
     let mut total_melt = 0.0;
     let mut total_precip = 0.0;
     // Cache de radiación potencial por día del año (se repite entre años).
     let mut rad_cache: HashMap<u32, Array2<f64>> = HashMap::new();
     for rec in &records {
-        let forcing = Forcing::Uniform {
-            t_ref: rec.temp_c,
-            z_ref,
-            precip: rec.precip_mm,
+        // Forzante uniforme (lapse rate + gradiente) o distribuido por grillas.
+        let forcing = if distributed {
+            let temp = match &cli.temp_grids {
+                Some(dir) => read_daily_grid(dir, "temp", &rec.date, shape)?,
+                None => {
+                    let (t_ref, lapse) = (rec.temp_c, cli.lapse_rate);
+                    elevation.mapv(|z| t_ref + lapse * (z - z_ref))
+                }
+            };
+            let precip = match &cli.precip_grids {
+                Some(dir) => read_daily_grid(dir, "precip", &rec.date, shape)?,
+                None => {
+                    let (p_ref, grad) = (rec.precip_mm, cli.precip_gradient);
+                    elevation.mapv(|z| (p_ref * (1.0 + grad * (z - z_ref))).max(0.0))
+                }
+            };
+            Forcing::Distributed { temp, precip }
+        } else {
+            Forcing::Uniform {
+                t_ref: rec.temp_c,
+                z_ref,
+                precip: rec.precip_mm,
+            }
         };
         let radiation = match &terrain {
             Some(terrain) => {

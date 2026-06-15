@@ -69,11 +69,43 @@ de forma uniforme y el óptimo queda en cielo despejado.
 
 **Sesgo estructural de septiembre**: el bias 1.54 / recall 1.0 de
 septiembre es **invariante a todos los parámetros del grid** — el modelo
-mantiene nieve en elevaciones bajas donde MODIS ya no la ve. No es un
-problema de derretimiento sino del forzante de temperatura: un único
-punto ERA5 extrapolado con lapse rate fijo (−6.5 °C/km) subestima el
-calor en las laderas bajas. Lo corregirá una temperatura distribuida
-(grilla ERA5/CR2MET tas), no la calibración del balance de energía.
+mantiene nieve en elevaciones bajas donde MODIS ya no la ve.
+
+## Forzante de precipitación distribuida (v0.7)
+
+Hipótesis: el exceso de nieve de septiembre en los valles viene de aplicar
+la precipitación **uniforme** del box a todas las elevaciones. Se probaron
+tres fuentes de precipitación (todas con EB, `τ=9`, `α_min=0.4`):
+
+| Precipitación | F1 agreg. | bias agreg. | sep F1 / bias |
+|---|---|---|---|
+| Uniforme (media del box) | 0.832 | 1.15 | 0.79 / 1.54 |
+| CR2MET 0.05° distribuida (bilinear) | 0.831 | 1.17 | 0.79 / 1.55 |
+| CR2MET + downscaling orográfico (γ=8e-4) | 0.819 | 1.19 | 0.79 / 1.53 |
+| Gradiente orográfico lineal (`--precip-gradient 1e-3`) | **0.834** | **1.07** | 0.86 / 1.26 |
+
+**Hallazgos**:
+
+1. **CR2MET distribuida ≈ uniforme.** A 0.05° (~5 km) sobre una cuenca de
+   ~37 km, CR2MET resuelve pocas celdas y su gradiente vertical efectivo es
+   débil; regrillarla no cambia la cobertura.
+2. **El downscaling orográfico de subgrilla** (realce por la anomalía de
+   elevación respecto a lo que "ve" el píxel CR2MET, método tipo Liston &
+   Elder) con γ físico (8e-4 m⁻¹) tampoco mueve septiembre: las anomalías de
+   subgrilla son moderadas y el realce introduce ruido en las cumbres
+   (noviembre empeora).
+3. **El gradiente lineal global** sí mejora el sesgo agregado (bias 1.15 →
+   1.07) y septiembre (F1 0.79 → 0.86), pero **por sobre-corrección**:
+   referido a `z_ref = 3117 m`, anula la precipitación bajo ~1500 m. Funciona
+   contra MODIS pero no es físicamente defendible como acumulación.
+
+**Conclusión**: para esta cuenca pequeña la precipitación distribuida
+disponible (CR2MET 0.05°) no resuelve el sesgo de elevaciones bajas; el
+cuello de botella es la resolución del producto, no el modelo. La
+infraestructura de forzantes distribuidas (`--precip-grids`,
+`--temp-grids`) queda lista para fuentes de mayor resolución y para
+temperatura distribuida real (ERA5 multi-celda), pendiente para una
+próxima iteración.
 
 ## Caveats
 
@@ -87,7 +119,8 @@ calor en las laderas bajas. Lo corregirá una temperatura distribuida
 ## Reproducir
 
 ```bash
-python3 fetch_data.py all      # DEM + forzantes + MODIS (≈2 min)
+python3 fetch_data.py all      # DEM + forzantes + MODIS + grillas precip (≈3 min)
+# precipitación distribuida: agrega --precip-grids data/grids al comando snowmelt
 # corrida calibrada:
 snowmelt --dem data/dem.asc --forcing data/forcing.csv --out-dir out \
   --z-ref 3117 --energy-balance --latitude -33.675 \

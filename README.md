@@ -182,10 +182,15 @@ reproducible, grid search de calibración y análisis de sesgos en
 snowmelt-validate out/cover_2019-07-15.asc:data/modis_2019-07-15.asc ...
 ```
 
-## Roadmap (v0.7)
+El forzante puede ser **distribuido por grillas** (`--precip-grids DIR`,
+`--temp-grids DIR`): un `.asc` por fecha en la malla del DEM, para usar
+precipitación/temperatura observada en lugar del valor de estación con
+lapse rate. Ver la validación para el pipeline CR2MET.
 
-- Forzante de temperatura distribuida (grilla ERA5/CR2MET) para corregir
-  el sesgo estructural de elevaciones bajas.
+## Roadmap (v0.8)
+
+- Temperatura distribuida real (ERA5 multi-celda) — la precipitación
+  distribuida CR2MET (0.05°) resultó insuficiente por resolución.
 - Validación de caudales contra estaciones DGA; interfaz hacia
   rainflow/Hydroflux.
 - Sublimación con resistencia aerodinámica explícita y balance de masa

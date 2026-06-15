@@ -670,6 +670,41 @@ mod tests {
     }
 
     #[test]
+    fn distributed_matches_uniform_when_built_by_lapse() {
+        // El CLI construye el forzante distribuido extrapolando por lapse;
+        // debe dar el mismo resultado que el forzante uniforme equivalente.
+        let dem = Dem::new(array![[1000.0, 2500.0], [4000.0, 1750.0]]).unwrap();
+        let params = DegreeDayParams::default();
+        let (t_ref, z_ref, precip) = (2.0, 2000.0, 8.0);
+
+        let mut uni = SnowModel::new(dem.clone(), params).unwrap();
+        let out_u = uni
+            .step(&Forcing::Uniform {
+                t_ref,
+                z_ref,
+                precip,
+            })
+            .unwrap();
+
+        let lapse = params.lapse_rate;
+        let temp = dem.elevation().mapv(|z| t_ref + lapse * (z - z_ref));
+        let precip_grid = dem.elevation().mapv(|_| precip);
+        let mut dist = SnowModel::new(dem, params).unwrap();
+        let out_d = dist
+            .step(&Forcing::Distributed {
+                temp,
+                precip: precip_grid,
+            })
+            .unwrap();
+
+        for idx in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+            assert!(approx(out_u.snowfall[idx], out_d.snowfall[idx]));
+            assert!(approx(out_u.melt[idx], out_d.melt[idx]));
+            assert!(approx(uni.swe()[idx], dist.swe()[idx]));
+        }
+    }
+
+    #[test]
     fn distributed_forcing_drives_each_cell_independently() {
         let mut m = SnowModel::new(flat_dem(1, 2, 0.0), DegreeDayParams::default()).unwrap();
         let out = m

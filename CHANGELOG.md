@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 — 2026-06-14
+
+### Agregado
+- **Forzante distribuido por grillas diarias** en la CLI: `--precip-grids
+  DIR` y `--temp-grids DIR` leen `precip_FECHA.asc` / `temp_FECHA.asc` (malla
+  del DEM) y alimentan `Forcing::Distributed`; el lado faltante se construye
+  por lapse rate (temperatura) o gradiente orográfico (precipitación). El
+  CSV de forzantes aporta las fechas.
+- **Pipeline de precipitación distribuida CR2MET** (`fetch_data.py grids`):
+  regrillado bilinear de CR2MET 0.05° al DEM con **downscaling orográfico de
+  subgrilla** (realce por anomalía de elevación, método tipo Liston & Elder).
+- Test de equivalencia `Forcing::Uniform` ↔ `Forcing::Distributed`
+  construido por lapse (valida la rama distribuida de la CLI).
+
+### Validación
+- Comparación de tres fuentes de precipitación en el Maipo alto. **Hallazgo
+  principal**: CR2MET 0.05° distribuida ≈ uniforme (resolución de ~5 km
+  insuficiente para una cuenca de ~37 km); el downscaling orográfico con γ
+  físico no resuelve el sesgo de septiembre. El gradiente lineal mejora el
+  bias agregado (1.15 → 1.07) pero por sobre-corrección. La infraestructura
+  queda lista para fuentes de mayor resolución / temperatura distribuida.
+
 ## 0.6.0 — 2026-06-13
 
 ### Agregado
