@@ -14,8 +14,11 @@ Genera en data/:
   - grids/precip_YYYY-MM-DD.asc   Precipitación diaria CR2MET v2.5
                            regrillada a la malla del DEM (mm), para el
                            forzante distribuido (--precip-grids).
+  - grids/temp_YYYY-MM-DD.asc     Temperatura diaria ERA5 multi-celda
+                           (Open-Meteo) con downscaling topográfico y
+                           lapse rate empírico, para --temp-grids.
 
-Uso: python3 fetch_data.py [dem|forcing|modis|grids|all]
+Uso: python3 fetch_data.py [dem|forcing|modis|grids|tempgrids|all]
 """
 
 import json
@@ -336,6 +339,93 @@ def fetch_precip_grids():
     print(f"  {n} grillas precip_*.asc en {grids_dir} (γ_orog={OROG_GAMMA})")
 
 
+def fetch_temp_grids():
+    """Temperatura distribuida ERA5 multi-celda → grids/temp_DATE.asc.
+
+    Consulta una malla de puntos ERA5 (Open-Meteo), deriva un lapse rate
+    EMPÍRICO diario por regresión T-vs-z de las celdas del modelo (no el
+    −6.5 °C/km asumido), reduce cada punto a nivel del mar, interpola
+    horizontalmente al DEM y re-extrapola con ese lapse a la elevación de
+    cada celda (downscaling topográfico estándar).
+    """
+    print("Temperatura distribuida ERA5 multi-celda → DEM...")
+    import rasterio
+    from rasterio.warp import transform as warp_transform
+    from scipy.interpolate import griddata
+
+    # Malla de puntos sobre el box (6×6); Open-Meteo los snapea a celdas ERA5.
+    n_side = 6
+    lats = np.linspace(BOX[1], BOX[3], n_side)
+    lons = np.linspace(BOX[0], BOX[2], n_side)
+    grid_lats, grid_lons = np.meshgrid(lats, lons)
+    lat_q = ",".join(f"{v:.4f}" for v in grid_lats.ravel())
+    lon_q = ",".join(f"{v:.4f}" for v in grid_lons.ravel())
+    url = (
+        "https://archive-api.open-meteo.com/v1/era5"
+        f"?latitude={lat_q}&longitude={lon_q}"
+        f"&start_date={START}&end_date={END}"
+        "&daily=temperature_2m_mean&timezone=UTC"
+    )
+    resp = http_json(url)
+    resp = resp if isinstance(resp, list) else [resp]
+
+    # Deduplicar celdas ERA5 (varios puntos snapean a la misma).
+    cells = {}
+    dates = None
+    for r in resp:
+        key = (round(r["latitude"], 4), round(r["longitude"], 4))
+        if key in cells:
+            continue
+        cells[key] = (r["elevation"], np.array(r["daily"]["temperature_2m_mean"], float))
+        dates = r["daily"]["time"]
+    pts_lat = np.array([k[0] for k in cells])
+    pts_lon = np.array([k[1] for k in cells])
+    pts_z = np.array([v[0] for v in cells.values()])
+    pts_t = np.array([v[1] for v in cells.values()])  # (n_cells, n_days)
+    print(f"  {len(cells)} celdas ERA5 únicas, {len(dates)} días")
+
+    # Puntos y celdas del DEM en UTM (interpolación métrica).
+    px, py = warp_transform("EPSG:4326", EPSG, list(pts_lon), list(pts_lat))
+    px, py = np.array(px), np.array(py)
+    dem_fine, (x_left, y_top, cs) = tif_to_array(os.path.join(DATA, "dem.tif"))
+    rows, cols = dem_fine.shape
+    cx = x_left + (np.arange(cols) + 0.5) * cs
+    cy = y_top - (np.arange(rows) + 0.5) * cs
+    mesh_x, mesh_y = np.meshgrid(cx, cy)
+    cell_xy = np.column_stack([mesh_x.ravel(), mesh_y.ravel()])
+    src_xy = np.column_stack([px, py])
+
+    grids_dir = os.path.join(DATA, "grids")
+    os.makedirs(grids_dir, exist_ok=True)
+    keep = set(read_forcing_dates())
+    n = 0
+    lapses = []
+    for i, d in enumerate(dates):
+        if d not in keep:
+            continue
+        t_day = pts_t[:, i]
+        # Lapse empírico del día por OLS (T vs z), acotado a rango físico.
+        slope = np.polyfit(pts_z, t_day, 1)[0]
+        lapse = float(np.clip(slope, -0.0098, -0.004))
+        lapses.append(lapse)
+        t0 = t_day - lapse * pts_z  # reducción a nivel del mar
+        lin = griddata(src_xy, t0, cell_xy, method="linear")
+        near = griddata(src_xy, t0, cell_xy, method="nearest")
+        t0_grid = np.where(np.isfinite(lin), lin, near).reshape(rows, cols)
+        t_grid = np.where(np.isfinite(dem_fine), t0_grid + lapse * dem_fine, np.nan)
+        write_asc(os.path.join(grids_dir, f"temp_{d}.asc"), t_grid, x_left, y_top, cs)
+        n += 1
+    print(f"  {n} grillas temp_*.asc (lapse empírico medio "
+          f"{np.mean(lapses) * 1000:.2f} °C/km, rango {min(lapses) * 1000:.1f}"
+          f"…{max(lapses) * 1000:.1f})")
+
+
+def read_forcing_dates():
+    with open(os.path.join(DATA, "forcing.csv")) as f:
+        next(f)
+        return [line.split(",")[0] for line in f if line.strip()]
+
+
 if __name__ == "__main__":
     os.makedirs(DATA, exist_ok=True)
     what = sys.argv[1] if len(sys.argv) > 1 else "all"
@@ -347,3 +437,5 @@ if __name__ == "__main__":
         fetch_modis()
     if what in ("grids", "all"):
         fetch_precip_grids()
+    if what in ("tempgrids", "all"):
+        fetch_temp_grids()

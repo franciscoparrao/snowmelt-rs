@@ -101,11 +101,26 @@ tres fuentes de precipitación (todas con EB, `τ=9`, `α_min=0.4`):
 
 **Conclusión**: para esta cuenca pequeña la precipitación distribuida
 disponible (CR2MET 0.05°) no resuelve el sesgo de elevaciones bajas; el
-cuello de botella es la resolución del producto, no el modelo. La
-infraestructura de forzantes distribuidas (`--precip-grids`,
-`--temp-grids`) queda lista para fuentes de mayor resolución y para
-temperatura distribuida real (ERA5 multi-celda), pendiente para una
-próxima iteración.
+cuello de botella es la resolución del producto, no el modelo.
+
+## Temperatura distribuida y cierre del estudio (v0.8)
+
+Se probó además temperatura distribuida ERA5 multi-celda (Open-Meteo,
+`fetch_data.py tempgrids`) con downscaling topográfico y **lapse rate
+empírico** derivado por regresión T-vs-z de las celdas del modelo (media
+−6.6, rango diario −4.0…−8.4 °C/km). Resultado: **empeora** (F1 0.79,
+bias 1.43). El campo distribuido es ~1–2.5 °C más frío que el punto
+central — la celda ERA5 del forzante uniforme era casualmente cálida, así
+que el punto único **acertaba por compensación de errores**.
+
+El control dominante resultó ser el **lapse rate**: endurecerlo a
+−7.5 °C/km (dentro del rango empírico ERA5) da la mejor configuración —
+**F1 0.834, accuracy 85.9%, bias 1.11** — sin forzante distribuido.
+
+Síntesis cuantitativa completa del estudio de forzantes (v0.6–v0.8) en
+[`FORCING_SENSITIVITY.md`](FORCING_SENSITIVITY.md). La infraestructura de
+forzantes distribuidos (`--precip-grids`, `--temp-grids`) queda lista
+para productos de resolución < 1 km.
 
 ## Caveats
 

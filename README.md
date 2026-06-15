@@ -172,9 +172,11 @@ Compilación: `pip install maturin && maturin develop --release -m crates/snowme
 ## Validación
 
 Validación contra MODIS MOD10A1 en la cuenca alta del Maipo (temporada
-2019, balance de energía + albedo dinámico): **accuracy 85.4%, F1 0.83,
-recall 0.90** calibrado (sin calibrar F1 0.81; julio F1 0.92). Pipeline
-reproducible, grid search de calibración y análisis de sesgos en
+2019, balance de energía + albedo dinámico, lapse calibrado −7.5 °C/km):
+**accuracy 85.9%, F1 0.834, bias 1.11** (julio F1 0.91). Pipeline
+reproducible, grid search de calibración y un
+[estudio de sensibilidad de forzantes](validation/maipo-alto/FORCING_SENSITIVITY.md)
+(uniforme vs precipitación/temperatura distribuida) en
 [`validation/maipo-alto/`](validation/maipo-alto/README.md). El binario
 `snowmelt-validate` calcula las métricas:
 
@@ -187,14 +189,14 @@ El forzante puede ser **distribuido por grillas** (`--precip-grids DIR`,
 precipitación/temperatura observada en lugar del valor de estación con
 lapse rate. Ver la validación para el pipeline CR2MET.
 
-## Roadmap (v0.8)
+## Roadmap (v0.9)
 
-- Temperatura distribuida real (ERA5 multi-celda) — la precipitación
-  distribuida CR2MET (0.05°) resultó insuficiente por resolución.
-- Validación de caudales contra estaciones DGA; interfaz hacia
+- Validación de caudales contra estaciones DGA (cierra el balance hídrico
+  más allá de la cobertura nival); interfaz de aporte hacia
   rainflow/Hydroflux.
-- Sublimación con resistencia aerodinámica explícita y balance de masa
-  multi-año.
+- Forzantes < 1 km (WRF dinámicamente downscaleado) — los reanálisis a
+  5–25 km no superan al uniforme calibrado (ver estudio de sensibilidad).
+- Sublimación con resistencia aerodinámica explícita y balance multi-año.
 
 ## Licencia
 

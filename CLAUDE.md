@@ -1,14 +1,14 @@
 # snowmelt-rs — Modelo de derretimiento nival / glaciar (Rust)
 
-> **Estado:** v0.7 implementado (2026-06-14): forzante distribuido por grillas
-> diarias en CLI (--precip-grids/--temp-grids) + pipeline CR2MET con downscaling
-> orográfico. **Hallazgo: CR2MET 0.05° ≈ uniforme (resolución insuficiente para
-> cuenca de 37 km); no resuelve el sesgo de septiembre.** Infraestructura lista
-> para fuentes de mayor resolución. v0.6: física EB completa + calibración MODIS
-> (F1 0.83). v0.5: validación MODIS + snowmelt-validate. v0.4: balance de energía.
-> v0.3: albedo dinámico/horizonte/PyO3. v0.2: ETI+SurtGIS. v0.1: grado-día+CLI.
-> Pendiente v0.8: temperatura distribuida REAL (ERA5 multi-celda), caudales DGA,
-> interfaz rainflow. Creado 2026-06-10.
+> **Estado:** v0.8 implementado (2026-06-15): temperatura distribuida ERA5 (Open-Meteo
+> multi-celda) con lapse empírico + estudio de sensibilidad de forzantes (FORCING_SENSITIVITY.md).
+> **Hallazgo de cierre: ningún forzante distribuido de reanálisis (CR2MET 0.05°, ERA5)
+> supera al uniforme calibrado; el lapse rate es el control dominante. Config operacional
+> = uniforme + lapse −7.5 °C/km → F1 0.834, acc 85.9%, bias 1.11.** El punto único acertaba
+> por compensación de errores. v0.7: forzante distribuido CLI + CR2MET. v0.6: física EB +
+> calibración. v0.5: validación MODIS. v0.4: EB. v0.3: albedo/horizonte/PyO3. v0.2:
+> ETI+SurtGIS. v0.1: grado-día+CLI. Pendiente v0.9: caudales DGA + interfaz rainflow,
+> forzantes <1 km (WRF). Creado 2026-06-10.
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea G3).
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.8.0 — 2026-06-15
+
+### Agregado
+- **Pipeline de temperatura distribuida ERA5** (`fetch_data.py tempgrids`):
+  malla de puntos ERA5 (Open-Meteo multi-celda), **lapse rate empírico**
+  derivado por regresión T-vs-z diaria, reducción a nivel del mar,
+  interpolación horizontal al DEM y re-extrapolación topográfica →
+  `temp_FECHA.asc` para `--temp-grids`.
+- **Estudio de sensibilidad de forzantes** (`validation/maipo-alto/FORCING_SENSITIVITY.md`):
+  síntesis cuantitativa v0.6–v0.8 de 7 configuraciones de forzante.
+
+### Hallazgos de validación
+- **El lapse rate es el control dominante** del sesgo de cobertura;
+  calibrarlo a −7.5 °C/km (dentro del rango empírico ERA5 −4…−8.4) da la
+  mejor configuración: **F1 0.834, accuracy 85.9%, bias 1.11**.
+- Temperatura distribuida ERA5 empeora (F1 0.79): el campo multi-celda es
+  ~1–2.5 °C más frío que el punto central, revelando que el forzante
+  uniforme acertaba por compensación de errores.
+- Ningún forzante distribuido de reanálisis (CR2MET 0.05°, ERA5) supera al
+  uniforme calibrado en esta cuenca de ~37 km; el límite es la resolución
+  de los productos y la incertidumbre de MODIS NDSI en la zona de
+  transición, no el modelo.
+
+### Sin cambios de motor
+- v0.8 es análisis + pipeline de datos; el soporte `--temp-grids` ya
+  existía desde v0.7.
+
 ## 0.7.0 — 2026-06-14
 
 ### Agregado
