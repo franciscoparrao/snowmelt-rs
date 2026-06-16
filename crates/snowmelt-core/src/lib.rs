@@ -35,6 +35,7 @@ pub mod error;
 pub mod forcing;
 pub mod model;
 pub mod params;
+pub mod routing;
 
 pub use dem::Dem;
 pub use energy::EnergyBalanceParams;
@@ -42,3 +43,4 @@ pub use error::{Result, SnowmeltError};
 pub use forcing::Forcing;
 pub use model::{SNOW_COVER_THRESHOLD_MM, SnowModel, StepOutput, StepSummary};
 pub use params::{AlbedoDecay, DegreeDayParams};
+pub use routing::{LinearReservoir, depth_to_discharge};

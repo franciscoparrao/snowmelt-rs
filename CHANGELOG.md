@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.9.0 — 2026-06-15
+
+### Agregado
+- **Ruteo por reservorio lineal** (`snowmelt-core::routing`): `LinearReservoir`
+  (Nash, una caja) transforma el aporte de cuenca (lluvia+derretimiento) en
+  un hidrograma con retardo/recesión, conservando masa exactamente; helper
+  `depth_to_discharge` (mm → m³/s). 7 tests.
+- CLI: `--route-k DÍAS` rutea el aporte medio de cuenca y agrega la columna
+  `routed_mm` a `series.csv`.
+- **Validación de caudal** (`validation/choapa-cuncumen/`) contra CAMELS-CL
+  4703002 (Río Choapa en Cuncumén, 1132 km², nival, 38 años): cuenca
+  representada por 12 bandas de elevación de igual área desde la curva
+  hipsométrica DEM-derivada; pipeline reproducible (`build_catchment.py`,
+  `validate_flow.py`).
+- **Interfaz hacia rainflow**: `series.csv` documentado como forzante de
+  aporte para el modelo lluvia-escorrentía.
+
+### Validación
+- El **deshielo ruteado** (k=90 d) reproduce la firma estacional del caudal
+  observado: **corr. diaria 0.81, NSE de forma 0.66, corr. ciclo anual 0.88**
+  (peak simulado mes 10 vs observado 11). Régimen nival correcto (SWE peak
+  116 mm en agosto, ablación sep–oct).
+- El aporte total (rain+melt) es peor (NSE 0.47): la lluvia invernal requiere
+  el balance lluvia-escorrentía de rainflow — motivación de la interfaz.
+
 ## 0.8.0 — 2026-06-15
 
 ### Agregado

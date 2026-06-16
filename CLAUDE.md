@@ -1,14 +1,15 @@
 # snowmelt-rs — Modelo de derretimiento nival / glaciar (Rust)
 
-> **Estado:** v0.8 implementado (2026-06-15): temperatura distribuida ERA5 (Open-Meteo
-> multi-celda) con lapse empírico + estudio de sensibilidad de forzantes (FORCING_SENSITIVITY.md).
-> **Hallazgo de cierre: ningún forzante distribuido de reanálisis (CR2MET 0.05°, ERA5)
-> supera al uniforme calibrado; el lapse rate es el control dominante. Config operacional
-> = uniforme + lapse −7.5 °C/km → F1 0.834, acc 85.9%, bias 1.11.** El punto único acertaba
-> por compensación de errores. v0.7: forzante distribuido CLI + CR2MET. v0.6: física EB +
-> calibración. v0.5: validación MODIS. v0.4: EB. v0.3: albedo/horizonte/PyO3. v0.2:
-> ETI+SurtGIS. v0.1: grado-día+CLI. Pendiente v0.9: caudales DGA + interfaz rainflow,
-> forzantes <1 km (WRF). Creado 2026-06-10.
+> **Estado:** v0.9 implementado (2026-06-15): ruteo por reservorio lineal
+> (snowmelt-core::routing) + CLI --route-k + **validación de CAUDAL contra CAMELS-CL
+> 4703002 (Río Choapa en Cuncumén, nival, 38 años) por bandas de elevación: el deshielo
+> ruteado reproduce la firma del caudal — corr diaria 0.81, NSE forma 0.66, corr ciclo
+> anual 0.88.** Interfaz hacia rainflow (series.csv = forzante de aporte). v0.8: temp
+> distribuida ERA5 + estudio sensibilidad forzantes (uniforme+lapse −7.5 óptimo).
+> v0.7: forzante distribuido CLI. v0.6: física EB + calibración MODIS (F1 0.83). v0.5:
+> validación MODIS. v0.4: EB. v0.3: albedo/horizonte/PyO3. v0.2: ETI+SurtGIS. v0.1:
+> grado-día+CLI. Pendiente v0.10: acople operativo rainflow, forzantes <1 km (WRF).
+> Creado 2026-06-10.
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea G3).
 

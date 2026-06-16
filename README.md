@@ -5,9 +5,10 @@ derretimiento — grado-día, ETI (Pellicciotti et al. 2005) y balance de
 energía completo (cold content, nubosidad, rain-on-snow, sublimación) —
 con acumulación/ablación de SWE por celda, partición lluvia-nieve por
 temperatura, albedo dinámico por edad, gradiente orográfico de
-precipitación y radiación potencial derivada del terreno (SurtGIS, con
-sombreado por horizonte), orientado a hidrología andina. Validado contra
-MODIS en una cuenca andina (F1 0.83).
+precipitación, radiación potencial derivada del terreno (SurtGIS, con
+sombreado por horizonte) y ruteo por reservorio lineal hacia un
+hidrograma. Orientado a hidrología andina. Validado contra MODIS
+(cobertura nival, F1 0.83) y caudales CAMELS-CL (deshielo, NSE 0.66).
 
 Parte de la familia de motores Rust: SurtGIS, Hydroflux, Smelt, Anvil,
 Cantus, Criterium.
@@ -19,6 +20,9 @@ Cantus, Criterium.
 | `snowmelt-core` | Modelo sin I/O: estado SWE (`ndarray`), grado-día/ETI, albedo dinámico por edad, lapse rate, partición lluvia-nieve, gradiente orográfico. Paralelo por celda con Rayon. |
 | `snowmelt-cli` | Binario `snowmelt`: lee DEM (ESRI ASCII Grid) + forzantes CSV, calcula radiación potencial (SurtGIS terrain, con sombreado por horizonte opcional) y escribe serie agregada + grilla final de SWE. |
 | `snowmelt-python` | Bindings PyO3/numpy (`import snowmelt`); compilar con `maturin develop -m crates/snowmelt-python/Cargo.toml`. |
+
+El binario `snowmelt-validate` calcula métricas de cobertura (confusión,
+F1, bias) entre grillas `.asc`.
 
 ## Uso rápido
 
@@ -184,16 +188,25 @@ reproducible, grid search de calibración y un
 snowmelt-validate out/cover_2019-07-15.asc:data/modis_2019-07-15.asc ...
 ```
 
+### Caudal (CAMELS-CL)
+
+Validación de la componente hidrológica contra el Río Choapa en Cuncumén
+(CAMELS-CL 4703002, cuenca nival, 38 años) con la cuenca discretizada en
+bandas de elevación de igual área y ruteo por reservorio lineal: el
+**deshielo reproduce la firma estacional del caudal** (corr. diaria 0.81,
+NSE de forma 0.66, corr. del ciclo anual 0.88). Detalle e interfaz hacia
+rainflow en [`validation/choapa-cuncumen/`](validation/choapa-cuncumen/README.md).
+
 El forzante puede ser **distribuido por grillas** (`--precip-grids DIR`,
 `--temp-grids DIR`): un `.asc` por fecha en la malla del DEM, para usar
 precipitación/temperatura observada en lugar del valor de estación con
-lapse rate. Ver la validación para el pipeline CR2MET.
+lapse rate. Ver la validación para el pipeline CR2MET. El aporte de cuenca
+se rutea a un hidrograma con `--route-k DÍAS` (reservorio lineal).
 
-## Roadmap (v0.9)
+## Roadmap (v0.10)
 
-- Validación de caudales contra estaciones DGA (cierra el balance hídrico
-  más allá de la cobertura nival); interfaz de aporte hacia
-  rainflow/Hydroflux.
+- Acople operativo con rainflow: snowmelt entrega el aporte líquido,
+  rainflow cierra el balance suelo-escorrentía (la interfaz ya está lista).
 - Forzantes < 1 km (WRF dinámicamente downscaleado) — los reanálisis a
   5–25 km no superan al uniforme calibrado (ver estudio de sensibilidad).
 - Sublimación con resistencia aerodinámica explícita y balance multi-año.

@@ -15,7 +15,9 @@ use ndarray::Array2;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use snowmelt_core::{AlbedoDecay, DegreeDayParams, Dem, EnergyBalanceParams, Forcing, SnowModel};
+use snowmelt_core::{
+    AlbedoDecay, DegreeDayParams, Dem, EnergyBalanceParams, Forcing, LinearReservoir, SnowModel,
+};
 use surtgis_algorithms::terrain::HorizonParams;
 
 #[derive(Parser, Debug)]
@@ -177,6 +179,12 @@ struct Cli {
     /// extrapolación por lapse rate del valor del CSV.
     #[arg(long)]
     temp_grids: Option<PathBuf>,
+
+    /// Constante de recesión [días] de un reservorio lineal que rutea el
+    /// aporte medio de cuenca (lluvia+derretimiento) a un hidrograma. Si se
+    /// indica, agrega la columna `routed_mm` a series.csv.
+    #[arg(long)]
+    route_k: Option<f64>,
 }
 
 /// Lee una grilla diaria `<prefix>_<date>.asc` del directorio y valida su
@@ -270,9 +278,18 @@ fn main() -> Result<()> {
     fs::create_dir_all(&cli.out_dir)
         .with_context(|| format!("no se pudo crear {}", cli.out_dir.display()))?;
 
+    let mut reservoir = match cli.route_k {
+        Some(k) => Some(LinearReservoir::new(k).context("--route-k inválido")?),
+        None => None,
+    };
     let mut series = String::from(
-        "date,snowfall_mm,rain_mm,melt_mm,sublimation_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction\n",
+        "date,snowfall_mm,rain_mm,melt_mm,sublimation_mm,runoff_mm,swe_mm,albedo,snow_cover_fraction",
     );
+    series.push_str(if reservoir.is_some() {
+        ",routed_mm\n"
+    } else {
+        "\n"
+    });
     let snapshot_dates: HashSet<&str> = cli.snapshot_dates.iter().map(String::as_str).collect();
     let shape = model.dem().shape();
     let distributed = cli.precip_grids.is_some() || cli.temp_grids.is_some();
@@ -338,7 +355,7 @@ fn main() -> Result<()> {
         let s = model.summarize(&out);
         total_melt += s.mean_melt;
         total_precip += rec.precip_mm;
-        let _ = writeln!(
+        let _ = write!(
             series,
             "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.4},{:.4}",
             rec.date,
@@ -351,6 +368,13 @@ fn main() -> Result<()> {
             s.mean_albedo,
             s.snow_cover_fraction
         );
+        match reservoir.as_mut() {
+            Some(r) => {
+                let routed = r.step(s.mean_runoff, 1.0);
+                let _ = writeln!(series, ",{routed:.3}");
+            }
+            None => series.push('\n'),
+        }
 
         if snapshot_dates.contains(rec.date.as_str()) {
             let swe_path = cli.out_dir.join(format!("swe_{}.asc", rec.date));
