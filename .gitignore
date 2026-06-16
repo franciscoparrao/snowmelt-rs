@@ -1,4 +1,6 @@
 /target
+coupling/target/
+coupling/Cargo.lock
 out*/
 validation/*/data/
 validation/*/out/

@@ -62,21 +62,28 @@ def main():
 
     rows = list(csv.DictReader(open(os.path.join(CAMELS, f"{GAUGE}.csv"))))
     with open(os.path.join(DATA, "forcing.csv"), "w") as ff, \
-         open(os.path.join(DATA, "qobs.csv"), "w") as fq:
+         open(os.path.join(DATA, "qobs.csv"), "w") as fq, \
+         open(os.path.join(DATA, "balance.csv"), "w") as fb:
         ff.write("date,temp_c,precip_mm\n")
         fq.write("date,qobs_mm\n")
+        # balance.csv: insumos para el acople lluvia-escorrentía (rainflow).
+        fb.write("date,precip_mm,pet_mm,qobs_mm\n")
         n_q = 0
         for r in rows:
             t = r.get("tmean", "")
             p = r.get("p", "0")
             if t in ("", "NA"):
                 continue
-            ff.write(f"{r['date']},{float(t):.2f},{max(float(p), 0.0):.2f}\n")
+            pv = max(float(p), 0.0)
+            ff.write(f"{r['date']},{float(t):.2f},{pv:.2f}\n")
             q = r.get("qobs", "NA")
-            fq.write(f"{r['date']},{q if q not in ('', 'NA') else 'NA'}\n")
+            qv = q if q not in ("", "NA") else "NA"
+            fq.write(f"{r['date']},{qv}\n")
+            pet = r.get("pet", "NA")
+            fb.write(f"{r['date']},{pv:.2f},{pet},{qv}\n")
             if q not in ("", "NA"):
                 n_q += 1
-        print(f"forcing.csv + qobs.csv: {len(rows)} días, {n_q} con qobs")
+        print(f"forcing.csv + qobs.csv + balance.csv: {len(rows)} días, {n_q} con qobs")
     print(f"\nz_ref sugerido: {z_ref:.0f} m | latitud Cuncumén ≈ -31.95")
 
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.10.0 — 2026-06-15
+
+### Agregado
+- **Acople operativo snowmelt-rs → rainflow** (`coupling/`, crate excluido
+  del workspace, opt-in): snowmelt resuelve la fase nival y entrega el aporte
+  líquido (lluvia+derretimiento); rainflow (GR4J) cierra el balance
+  suelo-escorrentía. Encadena ambos motores in-process (Rust→Rust).
+- Pipeline: `build_catchment.py` ahora exporta también `balance.csv`
+  (`precip_mm, pet_mm, qobs_mm`) como insumo del modelo lluvia-escorrentía.
+
+### Resultado
+- En el Río Choapa en Cuncumén (CAMELS-CL 4703002), GR4J con precipitación
+  cruda es inútil (val NSE −0.38 / −0.16); alimentado por el aporte de
+  snowmelt sube a **+0.22 / +0.23**. Confirma que la fase nival es decisiva
+  y que la interfaz funciona. Los parámetros nivales son físicos y fijos
+  (calibrados contra MODIS, no contra el hidrograma): más parsimonioso y
+  transferible que el HBV+snow totalmente calibrado de rainflow.
+
 ## 0.9.0 — 2026-06-15
 
 ### Agregado

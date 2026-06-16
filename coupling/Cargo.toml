@@ -1,0 +1,25 @@
+[package]
+name = "snowmelt-rainflow-coupling"
+description = "Operational coupling of snowmelt-rs (snow phase) and rainflow (rainfall-runoff)"
+version = "0.10.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "couple"
+path = "src/main.rs"
+
+# Rutas relativas a checkouts adyacentes. Este crate está EXCLUIDO del
+# workspace de snowmelt-rs; compílalo aparte:
+#   cargo run --manifest-path coupling/Cargo.toml --release
+[dependencies]
+snowmelt-core = { path = "../crates/snowmelt-core" }
+snowmelt-cli = { path = "../crates/snowmelt-cli" }
+rainflow-core = { path = "../../rainflow/crates/rainflow-core" }
+ndarray = "0.16"
+csv = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1

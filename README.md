@@ -203,13 +203,17 @@ precipitación/temperatura observada en lugar del valor de estación con
 lapse rate. Ver la validación para el pipeline CR2MET. El aporte de cuenca
 se rutea a un hidrograma con `--route-k DÍAS` (reservorio lineal).
 
-## Roadmap (v0.10)
+El **acople con rainflow** (`coupling/`) cierra el balance hídrico: snowmelt
+entrega el aporte líquido y GR4J produce el caudal. En el Río Choapa en
+Cuncumén rescata a GR4J de inútil (NSE < 0 con precipitación cruda) a útil
+(NSE +0.22). Ver [`coupling/README.md`](coupling/README.md).
 
-- Acople operativo con rainflow: snowmelt entrega el aporte líquido,
-  rainflow cierra el balance suelo-escorrentía (la interfaz ya está lista).
+## Roadmap (v0.11)
+
 - Forzantes < 1 km (WRF dinámicamente downscaleado) — los reanálisis a
   5–25 km no superan al uniforme calibrado (ver estudio de sensibilidad).
 - Sublimación con resistencia aerodinámica explícita y balance multi-año.
+- Publicación: crates.io (core/cli) y wheel PyPI (bindings).
 
 ## Licencia
 
