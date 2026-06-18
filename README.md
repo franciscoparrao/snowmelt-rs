@@ -97,6 +97,38 @@ antes de derretir (L_f = 334 kJ/kg). El flujo latente negativo retira
 masa por **sublimación** (L_s = 2.834 MJ/kg), reportada aparte; balance
 de masa por celda: `Δswe = nieve − derretimiento − sublimación`.
 
+### Downscaling topográfico (forzante sub-km)
+
+Con `--downscale` el forzante distribuido se genera **desde el DEM** (estilo
+MicroMet, Liston & Elder 2006) en lugar de leer grillas externas: a partir
+del valor escalar del CSV se construyen campos de temperatura y
+precipitación a la resolución del DEM con tres controles de terreno además
+del lapse rate:
+
+- **Temperatura**: `T(z) = T_ref + lapse·(z − z_ref) + κ·Ω_c`, donde `Ω_c`
+  es la curvatura normalizada (`[−0.5, 0.5]`) y `κ` (`--temp-curvature`)
+  enfría los valles cóncavos y templa las cumbres convexas — proxy diario
+  del cold-air pooling.
+- **Viento**: factor de terreno `W = 1 + γ_s·Ω_s + γ_c·Ω_c`, con `Ω_s` la
+  pendiente en la dirección del viento (`--wind-dir`, grados desde donde
+  sopla) y `Ω_c` la curvatura.
+- **Precipitación**: factor de elevación de Thornton (1997)
+  `(1 + f·Δz)/(1 − f·Δz)` (`--precip-elev-factor`) por un realce orográfico
+  a barlovento `1 + γ_w·Ω_s` (`--precip-windward`) que aumenta las laderas
+  que enfrentan el viento y seca el sotavento.
+
+```bash
+snowmelt --dem data/dem.asc --forcing data/forcing.csv --out-dir out \
+  --z-ref 3117 --energy-balance --latitude -33.675 --lapse-rate -0.0075 \
+  --downscale --temp-curvature 5 --wind-dir 300
+```
+
+Los derivados de terreno (slope/aspect por Horn, curvatura Liston-Elder) se
+calculan en `snowmelt-core` sin dependencia GIS. Es excluyente con
+`--temp-grids`/`--precip-grids` (ambos definen el forzante distribuido).
+Sobre el Maipo alto la mejora es marginal y solo viene del término de
+curvatura (ver [estudio de sensibilidad](validation/maipo-alto/FORCING_SENSITIVITY.md)).
+
 ### Parámetros (defaults)
 
 | Flag | Default | Significado |
@@ -128,6 +160,13 @@ de masa por celda: `Δswe = nieve − derretimiento − sublimación`.
 | `--ground-heat` | 1.0 | Calor de suelo [W/m²] (modo EB) |
 | `--t-cold-max` | 10.0 | Enfriamiento máximo del pack [K] (cold content) |
 | `--cloud-fraction` | 0.0 | Fracción efectiva de nubes 0–1 (modo EB) |
+| `--downscale` | off | Downscaling topográfico del forzante desde el DEM |
+| `--temp-curvature` | 0.0 | Coef. temperatura por curvatura [°C] (cold-air pooling) |
+| `--precip-elev-factor` | 0.0 | Factor precipitación-elevación [km⁻¹] (Thornton) |
+| `--precip-windward` | 0.0 | Realce orográfico a barlovento γ_w |
+| `--wind-dir` | 300.0 | Dirección del viento dominante [° desde donde sopla] |
+| `--wind-slope-weight` | 0.5 | Peso pendiente-en-viento γ_s |
+| `--wind-curvature-weight` | 0.5 | Peso curvatura del factor de viento γ_c |
 
 ## API (snowmelt-core)
 
@@ -208,10 +247,12 @@ entrega el aporte líquido y GR4J produce el caudal. En el Río Choapa en
 Cuncumén rescata a GR4J de inútil (NSE < 0 con precipitación cruda) a útil
 (NSE +0.22). Ver [`coupling/README.md`](coupling/README.md).
 
-## Roadmap (v0.11)
+## Roadmap (v0.12)
 
-- Forzantes < 1 km (WRF dinámicamente downscaleado) — los reanálisis a
-  5–25 km no superan al uniforme calibrado (ver estudio de sensibilidad).
+- Forzante sinóptico WRF real (cuando haya salidas <1 km descargables):
+  el downscaling topográfico (v0.11) mostró que el detalle de terreno solo
+  aporta marginalmente; el cuello de botella es la representación sinóptica
+  del forzante, que WRF sí mejoraría.
 - Sublimación con resistencia aerodinámica explícita y balance multi-año.
 - Publicación: crates.io (core/cli) y wheel PyPI (bindings).
 

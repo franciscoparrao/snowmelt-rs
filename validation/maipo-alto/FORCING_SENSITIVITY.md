@@ -49,14 +49,53 @@ de más en la zona de transición), la causa más probable es una mezcla de
 (b) la resolución de los forzantes (5–25 km) frente al rango vertical de
 4400 m de la cuenca.
 
+## Downscaling topográfico a la resolución del DEM (v0.11)
+
+La hipótesis pendiente —que un forzante sub-km mejoraría sobre el lapse
+calibrado— se probó **sin necesidad de WRF**, generando los campos a la
+resolución del DEM (200 m) por downscaling topográfico estilo MicroMet
+(Liston & Elder 2006, `--downscale`): temperatura con curvatura (cold-air
+pooling), viento por terreno, y precipitación con factor de elevación y
+realce orográfico a barlovento. Todas las corridas parten de la
+configuración operacional (EB, `τ=9`, `α_min=0.4`, lapse −7.5 °C/km):
+
+| # | Configuración | F1 | accuracy | bias |
+|---|---|---|---|---|
+| 2 | Uniforme, lapse −7.5 (base) | 0.834 | 0.8585 | 1.114 |
+| 8 | + precip. barlovento (`γ_w=0.5`, viento 300°) | 0.832 | 0.8562 | 1.122 |
+| 9 | + precip. factor elevación (`f=0.1`) | 0.831 | 0.8559 | 1.117 |
+| 10 | + curvatura-T (`κ=3`) | 0.836 | 0.8599 | 1.115 |
+| 11 | **+ curvatura-T (`κ=5`, operacional)** | **0.836** | **0.8602** | 1.116 |
+| 12 | Todo combinado (`γ_w + f + κ`) | 0.831 | 0.8550 | 1.122 |
+
+**Hallazgos**:
+
+1. **Solo la curvatura-temperatura ayuda, y marginalmente.** El término de
+   cold-air pooling (`κ`) sube el F1 0.834 → 0.836 y la accuracy 85.85 →
+   86.02% de forma monótona hasta saturar en `κ≈5–7` (swing diario ±2.5 °C
+   valle/cumbre). Resuelve el contraste térmico de subgrilla que el lapse
+   uniforme aplana, con una ganancia pequeña pero consistente en julio,
+   agosto, octubre y noviembre.
+
+2. **La precipitación orográfica no ayuda** (filas 8, 9, 12), confirmando
+   el resultado nulo previo ahora con las palancas espaciales nuevas
+   (barlovento por viento·pendiente·aspecto, no solo elevación): a 200 m el
+   realce introduce ruido sin mejorar la cobertura agregada.
+
+3. **El sesgo de septiembre es invariante al detalle de terreno**
+   (0.8131 → 0.8132 con `κ=5`). Sigue respondiendo solo al lapse rate, lo
+   que refuerza que su causa es la resolución sinóptica del forzante y/o la
+   incertidumbre de MODIS, no la topografía de subgrilla.
+
 ## Conclusión operacional
 
-Para esta cuenca y escala, el **forzante uniforme con lapse rate
-calibrado (−7.5 °C/km)** es la configuración recomendada: máxima
-habilidad (F1 0.834, accuracy 85.9%) con el menor número de supuestos.
-Los forzantes distribuidos de reanálisis disponibles no superan esta
-línea base; lo harían productos de temperatura/precipitación de
-resolución < 1 km (p. ej. WRF dinámicamente downscaleado), pendiente
-para trabajo futuro. La infraestructura de forzantes distribuidos
-(`--precip-grids`, `--temp-grids`) y el pipeline de lapse empírico quedan
-listos para cuando esos datos estén disponibles.
+Para esta cuenca y escala, el **forzante uniforme con lapse rate calibrado
+(−7.5 °C/km)** sigue siendo la base recomendada; agregar
+`--downscale --temp-curvature 5` aporta una mejora marginal defendible
+(F1 0.836, accuracy 86.0%). La conclusión de fondo se confirma al llevar el
+forzante a 200 m: **el detalle topográfico que el DEM ya codifica casi no
+mueve la habilidad**; el cuello de botella es la representación sinóptica
+del forzante (temperatura/precipitación de mesoescala), que un modelo como
+WRF sí mejoraría, no la resolución espacial per se. La infraestructura de
+forzante distribuido (`--downscale`, `--precip-grids`, `--temp-grids`)
+queda lista para ese paso.

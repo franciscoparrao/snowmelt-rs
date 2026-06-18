@@ -16,7 +16,8 @@ use ndarray::Array2;
 use anyhow::{Context, Result};
 use clap::Parser;
 use snowmelt_core::{
-    AlbedoDecay, DegreeDayParams, Dem, EnergyBalanceParams, Forcing, LinearReservoir, SnowModel,
+    AlbedoDecay, DegreeDayParams, Dem, DownscaleParams, Downscaler, EnergyBalanceParams, Forcing,
+    LinearReservoir, SnowModel,
 };
 use surtgis_algorithms::terrain::HorizonParams;
 
@@ -185,6 +186,41 @@ struct Cli {
     /// indica, agrega la columna `routed_mm` a series.csv.
     #[arg(long)]
     route_k: Option<f64>,
+
+    /// Downscaling topográfico (MicroMet): genera grillas diarias de
+    /// temperatura y precipitación a la resolución del DEM desde el valor
+    /// escalar del CSV, con curvatura (cold-air pooling) y orografía a
+    /// barlovento. Excluyente con grillas externas para el mismo campo.
+    #[arg(long, default_value_t = false)]
+    downscale: bool,
+
+    /// Coeficiente de temperatura por curvatura [°C] (cold-air pooling):
+    /// suma `temp_curvature·Ω_c`, enfriando valles y templando cumbres.
+    #[arg(long, default_value_t = 0.0)]
+    temp_curvature: f64,
+
+    /// Factor precipitación-elevación [km⁻¹] (Thornton 1997):
+    /// P(z) = P_ref·(1 + f·Δz)/(1 − f·Δz), Δz en km.
+    #[arg(long, default_value_t = 0.0)]
+    precip_elev_factor: f64,
+
+    /// Realce orográfico a barlovento γ_w: P se escala por (1 + γ_w·Ω_s),
+    /// aumentando laderas que enfrentan el viento y secando el sotavento.
+    #[arg(long, default_value_t = 0.0)]
+    precip_windward: f64,
+
+    /// Dirección del viento dominante [° desde donde sopla, horario desde
+    /// el norte]. La precipitación frontal de Chile central es del NO (~300°).
+    #[arg(long, default_value_t = 300.0)]
+    wind_dir: f64,
+
+    /// Peso del término pendiente-en-viento en el factor de viento (γ_s)
+    #[arg(long, default_value_t = 0.5)]
+    wind_slope_weight: f64,
+
+    /// Peso del término de curvatura en el factor de viento (γ_c)
+    #[arg(long, default_value_t = 0.5)]
+    wind_curvature_weight: f64,
 }
 
 /// Lee una grilla diaria `<prefix>_<date>.asc` del directorio y valida su
@@ -248,6 +284,31 @@ fn main() -> Result<()> {
         }
     };
 
+    // Downscaling topográfico: precalcula derivados de terreno y produce
+    // grillas temp/precip por paso. Excluye grillas externas del mismo campo.
+    let downscaler = if cli.downscale {
+        if cli.temp_grids.is_some() || cli.precip_grids.is_some() {
+            anyhow::bail!(
+                "--downscale es excluyente con --temp-grids/--precip-grids (ambos definen el mismo forzante distribuido)"
+            );
+        }
+        let params = DownscaleParams {
+            lapse_rate: cli.lapse_rate,
+            temp_curvature: cli.temp_curvature,
+            precip_elev_factor: cli.precip_elev_factor,
+            precip_windward: cli.precip_windward,
+            wind_dir_from_deg: cli.wind_dir,
+            wind_slope_weight: cli.wind_slope_weight,
+            wind_curvature_weight: cli.wind_curvature_weight,
+        };
+        Some(
+            Downscaler::new(elevation.clone(), header.cellsize, z_ref, params)
+                .context("parámetros de downscaling inválidos")?,
+        )
+    } else {
+        None
+    };
+
     let params = DegreeDayParams {
         ddf: cli.ddf,
         t_melt: cli.t_melt,
@@ -292,9 +353,14 @@ fn main() -> Result<()> {
     });
     let snapshot_dates: HashSet<&str> = cli.snapshot_dates.iter().map(String::as_str).collect();
     let shape = model.dem().shape();
-    let distributed = cli.precip_grids.is_some() || cli.temp_grids.is_some();
+    let distributed =
+        cli.precip_grids.is_some() || cli.temp_grids.is_some() || downscaler.is_some();
     if distributed {
-        eprintln!("forzante distribuido: usando grillas diarias por fecha");
+        if downscaler.is_some() {
+            eprintln!("forzante distribuido: downscaling topográfico (MicroMet)");
+        } else {
+            eprintln!("forzante distribuido: usando grillas diarias por fecha");
+        }
     }
     let mut total_melt = 0.0;
     let mut total_precip = 0.0;
@@ -303,16 +369,18 @@ fn main() -> Result<()> {
     for rec in &records {
         // Forzante uniforme (lapse rate + gradiente) o distribuido por grillas.
         let forcing = if distributed {
-            let temp = match &cli.temp_grids {
-                Some(dir) => read_daily_grid(dir, "temp", &rec.date, shape)?,
-                None => {
+            let temp = match (&cli.temp_grids, &downscaler) {
+                (Some(dir), _) => read_daily_grid(dir, "temp", &rec.date, shape)?,
+                (None, Some(ds)) => ds.temperature(rec.temp_c),
+                (None, None) => {
                     let (t_ref, lapse) = (rec.temp_c, cli.lapse_rate);
                     elevation.mapv(|z| t_ref + lapse * (z - z_ref))
                 }
             };
-            let precip = match &cli.precip_grids {
-                Some(dir) => read_daily_grid(dir, "precip", &rec.date, shape)?,
-                None => {
+            let precip = match (&cli.precip_grids, &downscaler) {
+                (Some(dir), _) => read_daily_grid(dir, "precip", &rec.date, shape)?,
+                (None, Some(ds)) => ds.precip(rec.precip_mm),
+                (None, None) => {
                     let (p_ref, grad) = (rec.precip_mm, cli.precip_gradient);
                     elevation.mapv(|z| (p_ref * (1.0 + grad * (z - z_ref))).max(0.0))
                 }

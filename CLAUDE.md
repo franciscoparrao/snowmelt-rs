@@ -1,14 +1,20 @@
 # snowmelt-rs — Modelo de derretimiento nival / glaciar (Rust)
 
-> **Estado:** v0.10 implementado (2026-06-15): **acople operativo snowmelt→rainflow**
-> (coupling/, crate excluido del workspace, opt-in): GR4J con precip cruda inútil
-> (NSE −0.38/−0.16) → con aporte de snowmelt +0.22/+0.23 en Choapa-Cuncumén. Cierra
-> las 3 conexiones del ecosistema (SurtGIS, MODIS, rainflow). v0.9: ruteo reservorio
-> lineal + validación caudal CAMELS-CL (deshielo NSE forma 0.66, corr ciclo 0.88).
-> v0.8: temp distribuida ERA5 + estudio forzantes (uniforme+lapse −7.5 óptimo). v0.7:
-> forzante distribuido. v0.6: física EB + calibración MODIS (F1 0.83). v0.5: validación
-> MODIS. v0.4: EB. v0.3: albedo/horizonte/PyO3. v0.2: ETI+SurtGIS. v0.1: grado-día+CLI.
-> Pendiente v0.11: forzantes <1 km (WRF), publicación crates.io/PyPI. Creado 2026-06-10.
+> **Estado:** v0.11 implementado (2026-06-18): **downscaling topográfico de forzantes**
+> (snowmelt-core::downscale + terrain, estilo MicroMet/Liston-Elder): T con curvatura
+> (cold-air pooling), viento por terreno, precip con factor elevación + barlovento.
+> Vía honesta a forzante sub-km SIN correr WRF (no hay datos WRF locales). Re-validación
+> MODIS Maipo (200 m): mejora marginal y solo por curvatura-T (F1 0.834→0.836, acc
+> 86.0%); precip orográfica no ayuda; sept invariante (responde solo a lapse). Confirma
+> que el cuello de botella es el forzante sinóptico, no el detalle topográfico.
+> v0.10: **acople operativo snowmelt→rainflow** (coupling/, crate excluido, opt-in):
+> GR4J con precip cruda inútil (NSE −0.38/−0.16) → con aporte snowmelt +0.22/+0.23 en
+> Choapa-Cuncumén. Cierra las 3 conexiones del ecosistema (SurtGIS, MODIS, rainflow).
+> v0.9: ruteo reservorio lineal + validación caudal CAMELS-CL (deshielo NSE forma 0.66,
+> corr ciclo 0.88). v0.8: temp distribuida ERA5 + estudio forzantes (uniforme+lapse −7.5
+> óptimo). v0.7: forzante distribuido. v0.6: física EB + calibración MODIS (F1 0.83).
+> v0.5: validación MODIS. v0.4: EB. v0.3: albedo/horizonte/PyO3. v0.2: ETI+SurtGIS.
+> v0.1: grado-día+CLI. Pendiente v0.12: WRF real, publicación crates.io/PyPI. Creado 2026-06-10.
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea G3).
 

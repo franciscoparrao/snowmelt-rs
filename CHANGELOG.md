@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.11.0 — 2026-06-18
+
+### Agregado
+- **Downscaling topográfico de forzantes** (`snowmelt-core::downscale`,
+  estilo MicroMet, Liston & Elder 2006): a partir de un valor escalar de
+  temperatura y precipitación produce campos a la resolución del DEM con
+  tres controles de terreno más allá del lapse rate — (1) temperatura con
+  término de **curvatura** (cold-air pooling: enfría valles, templa
+  cumbres), (2) **viento** por terreno `W = 1 + γ_s·Ω_s + γ_c·Ω_c`, y
+  (3) precipitación con factor de elevación (Thornton 1997) y **realce
+  orográfico a barlovento** `1 + γ_w·Ω_s`.
+- `snowmelt-core::terrain`: derivados de terreno autocontenidos (sin
+  dependencia GIS) — slope/aspect por Horn (1981) y curvatura normalizada
+  Liston-Elder. 5 tests.
+- `downscale`: `Downscaler` + `DownscaleParams`. 9 tests.
+- CLI: `--downscale` con `--temp-curvature`, `--precip-elev-factor`,
+  `--precip-windward`, `--wind-dir`, `--wind-slope-weight`,
+  `--wind-curvature-weight`. Genera el forzante distribuido sin grillas
+  externas (excluyente con `--temp-grids`/`--precip-grids`).
+
+### Validación
+- Re-validación MODIS en el Maipo alto 2019 (sub-km, 200 m, vs lapse
+  −7.5 °C/km): el downscaling da una mejora **marginal y solo por la
+  curvatura-temperatura** (F1 0.834 → **0.836**, accuracy 85.85 → 86.02%);
+  la precipitación orográfica a barlovento y el factor de elevación **no
+  ayudan**, consistente con el estudio nulo previo. El sesgo estructural de
+  septiembre es invariante al detalle de terreno (responde solo al lapse
+  rate). Confirma la hipótesis del estudio de forzantes: el cuello de
+  botella es la representación sinóptica del forzante (que aportaría WRF),
+  no el detalle topográfico que el DEM ya codifica. Detalle en
+  `validation/maipo-alto/FORCING_SENSITIVITY.md`.
+
 ## 0.10.0 — 2026-06-15
 
 ### Agregado

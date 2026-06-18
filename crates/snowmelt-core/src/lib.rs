@@ -30,14 +30,17 @@
 //! ```
 
 pub mod dem;
+pub mod downscale;
 pub mod energy;
 pub mod error;
 pub mod forcing;
 pub mod model;
 pub mod params;
 pub mod routing;
+pub mod terrain;
 
 pub use dem::Dem;
+pub use downscale::{DownscaleParams, Downscaler};
 pub use energy::EnergyBalanceParams;
 pub use error::{Result, SnowmeltError};
 pub use forcing::Forcing;
