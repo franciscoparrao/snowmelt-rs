@@ -32,7 +32,8 @@ impl PyParams {
         albedo_tau=None, albedo_fresh=0.85, albedo_min=0.4, albedo_refresh=1.0,
         energy_balance=false, wind=2.0, rh=0.6, snow_emissivity=0.98,
         exchange_coeff=0.0015, ground_heat=1.0, t_cold_max=10.0,
-        cloud_fraction=0.0))]
+        cloud_fraction=0.0, aero_resistance=false, z0=1e-3, z0_heat=1e-4,
+        measurement_height=2.0, aero_stability=true))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         ddf: f64,
@@ -55,6 +56,11 @@ impl PyParams {
         ground_heat: f64,
         t_cold_max: f64,
         cloud_fraction: f64,
+        aero_resistance: bool,
+        z0: f64,
+        z0_heat: f64,
+        measurement_height: f64,
+        aero_stability: bool,
     ) -> PyResult<Self> {
         let inner = core::DegreeDayParams {
             ddf,
@@ -75,6 +81,12 @@ impl PyParams {
                 rel_humidity: rh,
                 snow_emissivity,
                 exchange_coeff,
+                aerodynamic: aero_resistance.then_some(core::AeroResistance {
+                    z0_momentum: z0,
+                    z0_heat,
+                    measurement_height,
+                    stability: aero_stability,
+                }),
                 ground_heat,
                 t_cold_max,
                 cloud_fraction,

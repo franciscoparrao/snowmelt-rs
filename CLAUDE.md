@@ -1,12 +1,16 @@
 # snowmelt-rs — Modelo de derretimiento nival / glaciar (Rust)
 
-> **Estado:** v0.11 implementado (2026-06-18): **downscaling topográfico de forzantes**
-> (snowmelt-core::downscale + terrain, estilo MicroMet/Liston-Elder): T con curvatura
-> (cold-air pooling), viento por terreno, precip con factor elevación + barlovento.
-> Vía honesta a forzante sub-km SIN correr WRF (no hay datos WRF locales). Re-validación
-> MODIS Maipo (200 m): mejora marginal y solo por curvatura-T (F1 0.834→0.836, acc
-> 86.0%); precip orográfica no ayuda; sept invariante (responde solo a lapse). Confirma
-> que el cuello de botella es el forzante sinóptico, no el detalle topográfico.
+> **Estado:** v0.12 implementado (2026-06-18): **resistencia aerodinámica + balance
+> multi-año**. snowmelt-core::energy gana AeroResistance (conductancia 1/r_a desde
+> rugosidad z0m/z0h + estabilidad Richardson bulk, reemplaza coef. bulk fijo); nuevo
+> módulo balance (MassBalance acumulación−ablación por celda + ELA). CLI --aero-resistance,
+> --mass-balance; PyParams sincronizado. Validación sublimación anclada a literatura
+> (sin datos DGA): 57–75% de ablación en Maipo seco-ventoso, dentro del rango andino
+> publicado; ELA ~4300 m. v0.11: **downscaling topográfico de forzantes** (downscale +
+> terrain, MicroMet/Liston-Elder): T con curvatura (cold-air pooling), viento por terreno,
+> precip elevación+barlovento. Vía honesta a sub-km SIN WRF. Re-validación MODIS Maipo
+> (200 m): mejora marginal solo por curvatura-T (F1 0.834→0.836); cuello de botella es el
+> forzante sinóptico, no el terreno.
 > v0.10: **acople operativo snowmelt→rainflow** (coupling/, crate excluido, opt-in):
 > GR4J con precip cruda inútil (NSE −0.38/−0.16) → con aporte snowmelt +0.22/+0.23 en
 > Choapa-Cuncumén. Cierra las 3 conexiones del ecosistema (SurtGIS, MODIS, rainflow).
@@ -14,7 +18,8 @@
 > corr ciclo 0.88). v0.8: temp distribuida ERA5 + estudio forzantes (uniforme+lapse −7.5
 > óptimo). v0.7: forzante distribuido. v0.6: física EB + calibración MODIS (F1 0.83).
 > v0.5: validación MODIS. v0.4: EB. v0.3: albedo/horizonte/PyO3. v0.2: ETI+SurtGIS.
-> v0.1: grado-día+CLI. Pendiente v0.12: WRF real, publicación crates.io/PyPI. Creado 2026-06-10.
+> v0.1: grado-día+CLI. Pendiente v0.13: WRF real, firn/hielo explícito, SWE DGA,
+> publicación crates.io/PyPI. Creado 2026-06-10.
 > Familia de motores Rust del autor: SurtGIS, Hydroflux, Smelt, Anvil, Cantus, Criterium.
 > Doc madre: `~/proyectos/ideas-motores-rust.md` (idea G3).
 

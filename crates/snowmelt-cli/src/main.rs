@@ -16,8 +16,9 @@ use ndarray::Array2;
 use anyhow::{Context, Result};
 use clap::Parser;
 use snowmelt_core::{
-    AlbedoDecay, DegreeDayParams, Dem, DownscaleParams, Downscaler, EnergyBalanceParams, Forcing,
-    LinearReservoir, SnowModel,
+    AeroResistance, AlbedoDecay, DegreeDayParams, Dem, DownscaleParams, Downscaler,
+    EnergyBalanceParams, Forcing, LinearReservoir, MassBalance, SnowModel,
+    equilibrium_line_altitude,
 };
 use surtgis_algorithms::terrain::HorizonParams;
 
@@ -221,6 +222,39 @@ struct Cli {
     /// Peso del término de curvatura en el factor de viento (γ_c)
     #[arg(long, default_value_t = 0.5)]
     wind_curvature_weight: f64,
+
+    /// Resistencia aerodinámica explícita para los flujos turbulentos (modo
+    /// EB): conductancia por perfil logarítmico desde la rugosidad en vez
+    /// del coeficiente bulk fijo, con corrección de estabilidad. Reemplaza
+    /// a --exchange-coeff.
+    #[arg(long, default_value_t = false)]
+    aero_resistance: bool,
+
+    /// Largo de rugosidad de momento z0m [m] (modo --aero-resistance)
+    #[arg(long, default_value_t = 1e-3)]
+    z0: f64,
+
+    /// Largo de rugosidad escalar z0h [m] para calor/vapor (modo --aero-resistance)
+    #[arg(long, default_value_t = 1e-4)]
+    z0_heat: f64,
+
+    /// Altura de medición del viento/temperatura/humedad [m] (modo --aero-resistance)
+    #[arg(long, default_value_t = 2.0)]
+    measurement_height: f64,
+
+    /// Desactiva la corrección de estabilidad (Richardson bulk) de la
+    /// resistencia aerodinámica (queda en régimen neutro)
+    #[arg(long, default_value_t = false)]
+    no_aero_stability: bool,
+
+    /// Acumula el balance de masa por celda (acumulación − ablación) sobre
+    /// toda la corrida, escribe `mass_balance.asc` e imprime la ELA.
+    #[arg(long, default_value_t = false)]
+    mass_balance: bool,
+
+    /// Bandas de elevación para estimar la ELA desde el balance de masa
+    #[arg(long, default_value_t = 20)]
+    ela_bands: usize,
 }
 
 /// Lee una grilla diaria `<prefix>_<date>.asc` del directorio y valida su
@@ -328,6 +362,12 @@ fn main() -> Result<()> {
             rel_humidity: cli.rh,
             snow_emissivity: cli.snow_emissivity,
             exchange_coeff: cli.exchange_coeff,
+            aerodynamic: cli.aero_resistance.then_some(AeroResistance {
+                z0_momentum: cli.z0,
+                z0_heat: cli.z0_heat,
+                measurement_height: cli.measurement_height,
+                stability: !cli.no_aero_stability,
+            }),
             ground_heat: cli.ground_heat,
             t_cold_max: cli.t_cold_max,
             cloud_fraction: cli.cloud_fraction,
@@ -353,6 +393,7 @@ fn main() -> Result<()> {
     });
     let snapshot_dates: HashSet<&str> = cli.snapshot_dates.iter().map(String::as_str).collect();
     let shape = model.dem().shape();
+    let mut mass_balance = cli.mass_balance.then(|| MassBalance::new(shape));
     let distributed =
         cli.precip_grids.is_some() || cli.temp_grids.is_some() || downscaler.is_some();
     if distributed {
@@ -421,6 +462,9 @@ fn main() -> Result<()> {
             .step_radiation(&forcing, radiation.map(|r| r.view()), 1.0)
             .with_context(|| format!("fallo en el paso {}", rec.date))?;
         let s = model.summarize(&out);
+        if let Some(mb) = mass_balance.as_mut() {
+            mb.add(&out);
+        }
         total_melt += s.mean_melt;
         total_precip += rec.precip_mm;
         let _ = write!(
@@ -469,6 +513,25 @@ fn main() -> Result<()> {
     asc::write(&swe_path, &header, model.swe())
         .with_context(|| format!("no se pudo escribir {}", swe_path.display()))?;
 
+    let mass_balance_report = match &mass_balance {
+        Some(mb) => {
+            let net = mb.net();
+            let mb_path = cli.out_dir.join("mass_balance.asc");
+            asc::write(&mb_path, &header, net.view())
+                .with_context(|| format!("no se pudo escribir {}", mb_path.display()))?;
+            let mean_net = {
+                let (sum, n) = net
+                    .iter()
+                    .filter(|v| v.is_finite())
+                    .fold((0.0, 0usize), |(s, n), &v| (s + v, n + 1));
+                if n == 0 { f64::NAN } else { sum / n as f64 }
+            };
+            let ela = equilibrium_line_altitude(&net.view(), &elevation.view(), cli.ela_bands);
+            Some((mb_path, mean_net, ela))
+        }
+        None => None,
+    };
+
     let final_swe = {
         let (sum, n) = model
             .swe()
@@ -484,5 +547,17 @@ fn main() -> Result<()> {
     println!("  SWE medio final     : {final_swe:.1} mm");
     println!("  serie agregada      : {}", series_path.display());
     println!("  SWE final (grilla)  : {}", swe_path.display());
+    if let Some((mb_path, mean_net, ela)) = mass_balance_report {
+        println!(
+            "  balance de masa     : {} (medio {mean_net:.1} mm w.e.)",
+            mb_path.display()
+        );
+        match ela {
+            Some(z) => println!("  ELA estimada        : {z:.0} m"),
+            None => println!(
+                "  ELA estimada        : sin cruce de balance (toda la cuenca gana o pierde masa)"
+            ),
+        }
+    }
     Ok(())
 }

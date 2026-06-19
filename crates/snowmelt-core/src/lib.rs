@@ -29,6 +29,7 @@
 //! # Ok::<(), snowmelt_core::SnowmeltError>(())
 //! ```
 
+pub mod balance;
 pub mod dem;
 pub mod downscale;
 pub mod energy;
@@ -39,9 +40,10 @@ pub mod params;
 pub mod routing;
 pub mod terrain;
 
+pub use balance::{MassBalance, equilibrium_line_altitude};
 pub use dem::Dem;
 pub use downscale::{DownscaleParams, Downscaler};
-pub use energy::EnergyBalanceParams;
+pub use energy::{AeroResistance, EnergyBalanceParams};
 pub use error::{Result, SnowmeltError};
 pub use forcing::Forcing;
 pub use model::{SNOW_COVER_THRESHOLD_MM, SnowModel, StepOutput, StepSummary};

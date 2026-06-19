@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.12.0 — 2026-06-18
+
+### Agregado
+- **Resistencia aerodinámica explícita** para los flujos turbulentos
+  (`snowmelt-core::energy::AeroResistance`): conductancia `1/r_a` desde un
+  perfil logarítmico con rugosidad de momento (`z0m`) y escalar (`z0h`),
+  más corrección de estabilidad por número de Richardson bulk (Anderson
+  1976; Tarboton & Luce 1996) — estable amortigua, inestable realza.
+  Reemplaza al coeficiente bulk fijo. Campo `aerodynamic: Option<…>` en
+  `EnergyBalanceParams` (retrocompatible: `None` mantiene el bulk). 5 tests.
+- **Balance de masa multi-año** (`snowmelt-core::balance`): `MassBalance`
+  acumula acumulación (nevada) y ablación (melt + sublimación) por celda
+  sobre cualquier corrida; `equilibrium_line_altitude` estima la ELA por
+  bandas de elevación. 5 tests.
+- CLI: `--aero-resistance` con `--z0`, `--z0-heat`, `--measurement-height`,
+  `--no-aero-stability`; `--mass-balance` (escribe `mass_balance.asc` e
+  imprime la ELA) con `--ela-bands`.
+- Bindings Python: `Params` acepta `aero_resistance`, `z0`, `z0_heat`,
+  `measurement_height`, `aero_stability`.
+
+### Validación
+- Estudio de sublimación anclado a literatura (`validation/maipo-alto/SUBLIMATION.md`,
+  sin datos DGA disponibles): la sublimación es 57–75% de la ablación en el
+  Maipo alto seco-ventoso, **dentro del rango publicado para los Andes**
+  (MacDonell et al. 2013: 80–90% en Pascua-Lama; Ayala et al. 2017). La
+  resistencia aerodinámica deriva la conductancia de la rugosidad (~40% más
+  que el bulk por defecto con `z0=1 mm`), desplazando ablación a
+  sublimación; la estabilidad afecta poco la fracción estacional (la
+  sublimación domina en gradiente neutro). ELA estimada ~4300 m (consistente
+  con Andes centrales).
+
 ## 0.11.0 — 2026-06-18
 
 ### Agregado

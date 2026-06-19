@@ -97,6 +97,27 @@ antes de derretir (L_f = 334 kJ/kg). El flujo latente negativo retira
 masa por **sublimación** (L_s = 2.834 MJ/kg), reportada aparte; balance
 de masa por celda: `Δswe = nieve − derretimiento − sublimación`.
 
+Los flujos turbulentos usan por defecto un coeficiente de intercambio bulk
+fijo (`--exchange-coeff`). Con `--aero-resistance` se calcula una
+**resistencia aerodinámica explícita** desde el perfil logarítmico de
+viento, `r_a = ln(z/z0m)·ln(z/z0h)/(k²·u)`, con rugosidad de momento
+(`--z0`) y escalar (`--z0-heat`) a la altura de medición
+(`--measurement-height`). La conductancia `1/r_a` sale así de la rugosidad
+física en vez de un parámetro ajustado, y se corrige por **estabilidad**
+(número de Richardson bulk; estable amortigua, inestable realza), salvo con
+`--no-aero-stability`. Es el control dominante de la sublimación en los
+Andes secos (ver [estudio de sublimación](validation/maipo-alto/SUBLIMATION.md)).
+
+### Balance de masa multi-año y línea de equilibrio
+
+Con `--mass-balance` el modelo acumula acumulación (nevada) − ablación
+(derretimiento + sublimación) por celda sobre toda la corrida, escribe
+`mass_balance.asc` (mm w.e., positivo = ganancia neta) e imprime la
+**altitud de la línea de equilibrio (ELA)** estimada por bandas de
+elevación (`--ela-bands`). Como el SWE persiste entre pasos, admite
+forzantes multi-año para balance de masa glaciar (`MassBalance` y
+`equilibrium_line_altitude` en `snowmelt-core::balance`).
+
 ### Downscaling topográfico (forzante sub-km)
 
 Con `--downscale` el forzante distribuido se genera **desde el DEM** (estilo
@@ -156,7 +177,14 @@ curvatura (ver [estudio de sensibilidad](validation/maipo-alto/FORCING_SENSITIVI
 | `--wind` | 2.0 | Viento [m/s] (modo EB) |
 | `--rh` | 0.6 | Humedad relativa 0–1 (modo EB) |
 | `--snow-emissivity` | 0.98 | Emisividad de la nieve (modo EB) |
-| `--exchange-coeff` | 0.0015 | Coef. de intercambio turbulento (modo EB) |
+| `--exchange-coeff` | 0.0015 | Coef. de intercambio turbulento bulk (modo EB) |
+| `--aero-resistance` | off | Resistencia aerodinámica explícita (reemplaza el bulk) |
+| `--z0` | 1e-3 | Rugosidad de momento z0m [m] (modo aero) |
+| `--z0-heat` | 1e-4 | Rugosidad escalar z0h [m] (modo aero) |
+| `--measurement-height` | 2.0 | Altura de medición [m] (modo aero) |
+| `--no-aero-stability` | off | Desactiva la corrección de estabilidad (modo aero) |
+| `--mass-balance` | off | Acumula balance de masa, escribe grilla e imprime ELA |
+| `--ela-bands` | 20 | Bandas de elevación para estimar la ELA |
 | `--ground-heat` | 1.0 | Calor de suelo [W/m²] (modo EB) |
 | `--t-cold-max` | 10.0 | Enfriamiento máximo del pack [K] (cold content) |
 | `--cloud-fraction` | 0.0 | Fracción efectiva de nubes 0–1 (modo EB) |
@@ -247,13 +275,15 @@ entrega el aporte líquido y GR4J produce el caudal. En el Río Choapa en
 Cuncumén rescata a GR4J de inútil (NSE < 0 con precipitación cruda) a útil
 (NSE +0.22). Ver [`coupling/README.md`](coupling/README.md).
 
-## Roadmap (v0.12)
+## Roadmap (v0.13)
 
 - Forzante sinóptico WRF real (cuando haya salidas <1 km descargables):
   el downscaling topográfico (v0.11) mostró que el detalle de terreno solo
   aporta marginalmente; el cuello de botella es la representación sinóptica
   del forzante, que WRF sí mejoraría.
-- Sublimación con resistencia aerodinámica explícita y balance multi-año.
+- Estado explícito de firn/hielo (albedo y densidad propios) sobre el
+  balance de masa multi-año (v0.12).
+- Validación de SWE contra rutas de nieve DGA (pendiente de datos).
 - Publicación: crates.io (core/cli) y wheel PyPI (bindings).
 
 ## Licencia

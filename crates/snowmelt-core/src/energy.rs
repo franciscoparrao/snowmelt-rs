@@ -40,6 +40,113 @@ const L_SUBLIMATION: f64 = 2.834e6;
 const R_DRY: f64 = 287.05;
 /// Seconds per day.
 const DAY_S: f64 = 86_400.0;
+/// Gravitational acceleration (m s⁻²).
+const G_ACCEL: f64 = 9.81;
+/// Von Kármán constant.
+const VON_KARMAN: f64 = 0.4;
+/// Critical bulk Richardson number above which turbulence is fully damped.
+const RI_CRIT: f64 = 0.2;
+
+/// Explicit aerodynamic resistance for the turbulent fluxes.
+///
+/// Replaces the single bulk exchange coefficient with a Monin–Obukhov-style
+/// neutral aerodynamic resistance from a logarithmic wind profile,
+///
+/// ```text
+/// r_a = ln(z/z0m)·ln(z/z0h) / (k²·u)      [s m⁻¹]
+/// ```
+///
+/// so the turbulent conductance `1/r_a` follows physically from the surface
+/// roughness instead of a tuned constant. With `stability` on, the
+/// conductance is scaled by a bulk-Richardson stability function (Anderson
+/// 1976; Tarboton & Luce 1996): stable stratification (warm air over cold
+/// snow) damps the fluxes, unstable enhances them — the dominant control on
+/// snow sublimation that a fixed coefficient misses.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AeroResistance {
+    /// Momentum roughness length `z0m` (m). Snow: ~1e-4 to 5e-3.
+    pub z0_momentum: f64,
+    /// Scalar (heat/vapour) roughness length `z0h` (m). Often `z0m/10` or
+    /// smaller over snow.
+    pub z0_heat: f64,
+    /// Measurement height of wind, temperature and humidity (m). Typical: 2.
+    pub measurement_height: f64,
+    /// Apply the bulk-Richardson stability correction.
+    pub stability: bool,
+}
+
+impl Default for AeroResistance {
+    fn default() -> Self {
+        Self {
+            z0_momentum: 1e-3,
+            z0_heat: 1e-4,
+            measurement_height: 2.0,
+            stability: true,
+        }
+    }
+}
+
+impl AeroResistance {
+    /// Checks roughness lengths are positive and below the measurement
+    /// height (so the log profile is finite and positive).
+    ///
+    /// # Errors
+    /// Returns [`SnowmeltError::InvalidParameter`] on the first violation.
+    pub fn validate(&self) -> Result<()> {
+        let checks: [(&'static str, f64, bool); 3] = [
+            (
+                "z0_momentum",
+                self.z0_momentum,
+                self.z0_momentum.is_finite()
+                    && self.z0_momentum > 0.0
+                    && self.z0_momentum < self.measurement_height,
+            ),
+            (
+                "z0_heat",
+                self.z0_heat,
+                self.z0_heat.is_finite()
+                    && self.z0_heat > 0.0
+                    && self.z0_heat < self.measurement_height,
+            ),
+            (
+                "measurement_height",
+                self.measurement_height,
+                self.measurement_height.is_finite() && self.measurement_height > 0.0,
+            ),
+        ];
+        for (name, value, ok) in checks {
+            if !ok {
+                return Err(SnowmeltError::InvalidParameter {
+                    name,
+                    reason: format!("out of domain: {value}"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Neutral turbulent conductance `1/r_a` (m s⁻¹) at wind speed `u`.
+    fn neutral_conductance(&self, u: f64) -> f64 {
+        let u = u.max(0.1); // floor to keep a finite resistance in calm air
+        let ln_m = (self.measurement_height / self.z0_momentum).ln();
+        let ln_h = (self.measurement_height / self.z0_heat).ln();
+        VON_KARMAN * VON_KARMAN * u / (ln_m * ln_h)
+    }
+}
+
+/// Bulk-Richardson stability factor for the turbulent conductance.
+///
+/// `1` at neutral; `< 1` (down to 0 at [`RI_CRIT`]) for stable
+/// stratification `Ri > 0`; `> 1` for unstable `Ri < 0`.
+fn stability_factor(ri: f64) -> f64 {
+    if ri >= 0.0 {
+        let ri = ri.min(RI_CRIT);
+        let f = 1.0 - ri / RI_CRIT;
+        f * f
+    } else {
+        (1.0 - 16.0 * ri).powf(0.75)
+    }
+}
 
 /// Parameters of the energy-balance melt mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,8 +158,12 @@ pub struct EnergyBalanceParams {
     /// Snow surface emissivity (0–1]. Typical: 0.97–0.99.
     pub snow_emissivity: f64,
     /// Bulk exchange coefficient for sensible and latent heat (–).
-    /// Typical: 0.001–0.003.
+    /// Typical: 0.001–0.003. Ignored when `aerodynamic` is `Some`.
     pub exchange_coeff: f64,
+    /// Explicit aerodynamic resistance for the turbulent fluxes. When set,
+    /// it replaces the `exchange_coeff` bulk path (roughness-based
+    /// conductance plus optional stability correction).
+    pub aerodynamic: Option<AeroResistance>,
     /// Ground heat flux into the pack (W m⁻²). Typical: 0–2.
     pub ground_heat: f64,
     /// Maximum pack cooling below 0 °C (K) used to cap the cold content
@@ -71,6 +182,7 @@ impl Default for EnergyBalanceParams {
             rel_humidity: 0.6,
             snow_emissivity: 0.98,
             exchange_coeff: 0.0015,
+            aerodynamic: None,
             ground_heat: 1.0,
             t_cold_max: 10.0,
             cloud_fraction: 0.0,
@@ -116,6 +228,9 @@ impl EnergyBalanceParams {
                     reason: format!("out of domain: {value}"),
                 });
             }
+        }
+        if let Some(aero) = &self.aerodynamic {
+            aero.validate()?;
         }
         Ok(())
     }
@@ -165,12 +280,27 @@ pub(crate) fn energy_fluxes(
     let emiss_air = emiss_air.min(1.0);
     let q_lw = emiss_air * SIGMA * t_air_k.powi(4) - p.snow_emissivity * SIGMA * t_surf_k.powi(4);
 
-    // Turbulent fluxes (bulk aerodynamic).
+    // Turbulent fluxes: either a fixed bulk coefficient (`C_e·u`) or an
+    // explicit roughness-based conductance (`1/r_a`) with optional
+    // bulk-Richardson stability correction.
     let rho_air = pressure_pa / (R_DRY * t_air_k);
-    let q_h = rho_air * CP_AIR * p.exchange_coeff * p.wind_speed * (t_air_c - t_surf_c);
     let q_air = 0.622 * (e_air_hpa * 100.0) / pressure_pa;
     let q_surf = 0.622 * (e_sat_hpa(t_surf_c) * 100.0) / pressure_pa;
-    let q_e = rho_air * L_SUBLIMATION * p.exchange_coeff * p.wind_speed * (q_air - q_surf);
+    let conductance = match &p.aerodynamic {
+        Some(aero) => {
+            let mut g = aero.neutral_conductance(p.wind_speed);
+            if aero.stability {
+                let u = p.wind_speed.max(0.1);
+                let ri =
+                    G_ACCEL * aero.measurement_height * (t_air_c - t_surf_c) / (t_air_k * u * u);
+                g *= stability_factor(ri);
+            }
+            g
+        }
+        None => p.exchange_coeff * p.wind_speed,
+    };
+    let q_h = rho_air * CP_AIR * conductance * (t_air_c - t_surf_c);
+    let q_e = rho_air * L_SUBLIMATION * conductance * (q_air - q_surf);
 
     // Rain-on-snow advective heat (rain at air temperature onto a 0 °C pack).
     let q_r = C_WATER * rain_mm * t_air_c.max(0.0) / (dt_days * DAY_S);
@@ -333,6 +463,123 @@ mod tests {
         assert!(cc <= cap + 1e-6, "cc {cc} > cap {cap}");
         apply_energy(&p, -200.0, 1.0, 0.0, &mut cc);
         assert_eq!(cc, 0.0);
+    }
+
+    #[test]
+    fn aero_resistance_validates_and_rejects_bad_roughness() {
+        AeroResistance::default().validate().unwrap();
+        for bad in [
+            AeroResistance {
+                z0_momentum: 0.0,
+                ..Default::default()
+            },
+            AeroResistance {
+                z0_heat: -1e-4,
+                ..Default::default()
+            },
+            AeroResistance {
+                z0_momentum: 5.0, // above measurement height
+                ..Default::default()
+            },
+        ] {
+            assert!(bad.validate().is_err(), "{bad:?}");
+        }
+        // Through EnergyBalanceParams too.
+        let p = EnergyBalanceParams {
+            aerodynamic: Some(AeroResistance {
+                z0_momentum: 0.0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn stability_factor_neutral_stable_unstable() {
+        assert!((stability_factor(0.0) - 1.0).abs() < 1e-12);
+        assert!(stability_factor(0.1) < 1.0); // stable damps
+        assert_eq!(stability_factor(RI_CRIT), 0.0); // fully damped at critical
+        assert_eq!(stability_factor(1.0), 0.0); // capped beyond critical
+        assert!(stability_factor(-0.5) > 1.0); // unstable enhances
+    }
+
+    #[test]
+    fn rougher_surface_increases_turbulent_exchange() {
+        let press = air_pressure_pa(3000.0);
+        let smooth = EnergyBalanceParams {
+            aerodynamic: Some(AeroResistance {
+                z0_momentum: 1e-4,
+                z0_heat: 1e-5,
+                stability: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let rough = EnergyBalanceParams {
+            aerodynamic: Some(AeroResistance {
+                z0_momentum: 5e-3,
+                z0_heat: 5e-4,
+                stability: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Cold dry air over snow: latent flux (sublimation) is negative;
+        // a rougher surface makes it more negative (stronger exchange).
+        let (_, qe_smooth) = energy_fluxes(&smooth, -8.0, 100.0, 0.8, press, 0.0, 1.0);
+        let (_, qe_rough) = energy_fluxes(&rough, -8.0, 100.0, 0.8, press, 0.0, 1.0);
+        assert!(qe_smooth < 0.0 && qe_rough < 0.0);
+        assert!(
+            qe_rough < qe_smooth,
+            "rough {qe_rough} vs smooth {qe_smooth}"
+        );
+    }
+
+    #[test]
+    fn stability_damps_sensible_flux_on_warm_air() {
+        let press = air_pressure_pa(2000.0);
+        let neutral = EnergyBalanceParams {
+            aerodynamic: Some(AeroResistance {
+                stability: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let stable = EnergyBalanceParams {
+            aerodynamic: Some(AeroResistance {
+                stability: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        // Warm air (8 °C) over a 0 °C snow surface → stable stratification.
+        // Isolate Q_H by comparing total energy at the same low radiation;
+        // the stable run must transfer less sensible heat.
+        let (q_neu, _) = energy_fluxes(&neutral, 8.0, 50.0, 0.6, press, 0.0, 1.0);
+        let (q_sta, _) = energy_fluxes(&stable, 8.0, 50.0, 0.6, press, 0.0, 1.0);
+        assert!(q_sta < q_neu, "stable {q_sta} should be < neutral {q_neu}");
+    }
+
+    #[test]
+    fn aero_and_bulk_give_comparable_magnitude() {
+        let press = air_pressure_pa(2500.0);
+        let bulk = EnergyBalanceParams::default();
+        let aero = EnergyBalanceParams {
+            aerodynamic: Some(AeroResistance {
+                stability: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let (q_bulk, _) = energy_fluxes(&bulk, 5.0, 200.0, 0.6, press, 0.0, 1.0);
+        let (q_aero, _) = energy_fluxes(&aero, 5.0, 200.0, 0.6, press, 0.0, 1.0);
+        // Same sign and within a factor of ~3 (roughness vs tuned constant).
+        assert!(q_bulk > 0.0 && q_aero > 0.0);
+        assert!(
+            (q_aero / q_bulk) > 0.3 && (q_aero / q_bulk) < 3.0,
+            "{q_aero} vs {q_bulk}"
+        );
     }
 
     #[test]
