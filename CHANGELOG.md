@@ -1,5 +1,19 @@
 # Changelog
 
+## Sin publicar (v0.13 en progreso)
+
+### Agregado
+- **Métricas de SWE continuo** (`snowmelt-core::metrics::continuous_skill`):
+  RMSE, sesgo (MBE), MAE, correlación de Pearson y KGE sobre los pares
+  co-válidos; genérico sobre iteradores `(modelo, referencia)`, sirve para
+  comparar grillas por fecha o series de cuenca. 5 tests.
+- `snowmelt-validate --mode swe`: compara SWE continuo (vs una reanálisis
+  como Andes-SR) además del modo `cover` (confusión binaria vs MODIS).
+- Harness de validación de SWE contra **Andes-SR** (Cortés & Margulis;
+  `validation/swe-andes-sr/`): instrucciones de descarga y pipeline. La
+  ingesta HDF5 y la corrida quedan pendientes de los datos (Box de UCLA,
+  descarga manual; el dataset llega hasta el año de agua 2015).
+
 ## 0.12.0 — 2026-06-18
 
 ### Agregado
